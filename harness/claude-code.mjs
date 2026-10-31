@@ -160,6 +160,7 @@ export function runOnce(o) {
     if (ev.type === 'turn_end') outcome = ev
   })
   events.on('stderr', (s) => (stderr += s))
+  child.on('error', (err) => events.emit('error', err)) // spawn failure; 'close' still follows
   pipeEvents(child, events, () => since)
   const done = new Promise((resolve) => child.on('close', (code) => resolve({ code, outcome, events: all, stderr })))
   child.stdin.end(o.prompt ?? '')
