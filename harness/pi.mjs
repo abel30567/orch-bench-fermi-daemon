@@ -7,10 +7,19 @@
 // orderly shutdown), so the prompt never reaches argv.
 //
 // Options beyond the contract:
-//   bin   default env PI_BIN, else `pi` on PATH
+//   bin          default env PI_BIN, else `pi` on PATH
+//   sandboxHome  eval mode, required with mcpConfig (and only with it): pi runs
+//                with HOME=<sandboxHome> and PI_CODING_AGENT_DIR=<sandboxHome>/.pi/agent,
+//                and the only MCP servers it sees are mcpConfig's (a file path,
+//                inline JSON or an object), translated to <agent-dir>/mcp.json.
+//                Anything but localhost URLs refuses to start. The real
+//                ~/.pi/agent/mcp.json is never read. The login is the real
+//                auth.json, copied in because pi can log in from nothing else
+//                (see the credential blocker below); the copy is deleted on
+//                close() or when pi exits. The caller owns sandboxHome itself.
 // allowedTools is ignored and runOnce's skipPermissions/maxTurns have no pi
-// equivalent. tokenFd, configDir, mcpConfig and scrubSubprocessEnv are refused
-// (they promise an isolation pi cannot give; see below).
+// equivalent. tokenFd, configDir and scrubSubprocessEnv are refused (they promise
+// an isolation pi cannot give; see below), and so is mcpConfig without sandboxHome.
 //
 // Known gaps vs the Claude Code adapter:
 //   - No per-turn cost or session id. pi has no turn-level result record (Claude's
@@ -31,16 +40,56 @@
 //     the no-prompt read/bash tools can open). There is no fd handoff like
 //     CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR, so tokenFd is refused and the
 //     conformance credential-isolation case is expectedFail. Do not swap pi into
-//     the live worker until the credential is out of reach of its tools.
+//     the live worker until the credential is out of reach of its tools. Eval mode
+//     has the same exposure: the sandbox auth.json is readable by pi's tools for
+//     the whole attempt, and an OAuth refresh pi does there is lost with the copy.
 
 import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
+import { assertLocalUrls } from '../lib/local-url.mjs'
 import { classifyResult } from '../lib/turn-outcome.mjs'
 import { bareToolName } from './index.mjs'
 
 export const name = 'pi'
 
-const UNSUPPORTED = ['tokenFd', 'configDir', 'mcpConfig', 'scrubSubprocessEnv']
+const UNSUPPORTED = ['tokenFd', 'configDir', 'scrubSubprocessEnv']
+
+// The runner's MCP config (object, inline JSON or a file path; the shapes claude's
+// --mcp-config takes) → pi's mcp.json. Only each server's url carries over, so
+// every URL in the result has passed the guard. A server without one (stdio) is
+// refused too: it could reach anything.
+export function piMcpConfig(config) {
+  const parsed = typeof config !== 'string' ? config : JSON.parse(config.trim().startsWith('{') ? config : readFileSync(config, 'utf8'))
+  const servers = Object.entries(parsed?.mcpServers ?? {})
+  assertLocalUrls(Object.fromEntries(servers.map(([k, s]) => [`mcp:${k}`, s?.url ?? '(no url)'])))
+  return { mcpServers: Object.fromEntries(servers.map(([k, s]) => [k, { url: s.url }])) }
+}
+
+// Eval mode's child env and files; returns { env, cleanup }. Writes nothing until
+// the config has passed the guard.
+function prepareSandbox(o, parentEnv) {
+  if (o.mcpConfig == null && o.sandboxHome == null) return { env: {}, cleanup() {} }
+  if (o.sandboxHome == null) throw new Error('pi adapter: mcpConfig without sandboxHome would use the real ~/.pi (see harness/pi.mjs)')
+  if (o.mcpConfig == null) throw new Error('pi adapter: sandboxHome without mcpConfig (see harness/pi.mjs)')
+  const mcp = piMcpConfig(o.mcpConfig)
+  const home = resolve(o.sandboxHome)
+  const realHome = parentEnv.HOME
+  if (realHome && resolve(realHome) === home) throw new Error('pi adapter: sandboxHome is the real HOME')
+  const agentDir = join(home, '.pi/agent')
+  mkdirSync(agentDir, { recursive: true, mode: 0o700 })
+  writeFileSync(join(agentDir, 'mcp.json'), JSON.stringify(mcp, null, 2))
+  const auth = join(agentDir, 'auth.json')
+  const cleanup = () => rmSync(auth, { force: true })
+  cleanup()
+  const realAuth = realHome && join(realHome, '.pi/agent/auth.json')
+  if (realAuth && existsSync(realAuth)) {
+    copyFileSync(realAuth, auth)
+    chmodSync(auth, 0o600)
+  }
+  return { env: { HOME: home, PI_CODING_AGENT_DIR: agentDir }, cleanup }
+}
 
 export function sessionArgs({ model, systemPrompt }) {
   const a = ['--mode', 'rpc']
@@ -106,12 +155,26 @@ export function createNormalizer() {
 function open(o) {
   const bad = UNSUPPORTED.filter((k) => o[k] != null)
   if (bad.length) throw new Error(`pi adapter: unsupported option(s) ${bad.join(', ')} (see harness/pi.mjs)`)
-  const child = spawn(o.bin || process.env.PI_BIN || 'pi', sessionArgs(o), {
-    cwd: o.cwd,
-    env: { ...process.env, ...o.env },
-    stdio: ['pipe', 'pipe', 'pipe'],
-  })
+  const parentEnv = { ...process.env, ...o.env }
+  const sandbox = prepareSandbox(o, parentEnv)
+  let child
+  try {
+    child = spawn(o.bin || process.env.PI_BIN || 'pi', sessionArgs(o), {
+      cwd: o.cwd,
+      env: { ...parentEnv, ...sandbox.env },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+  } catch (err) {
+    sandbox.cleanup()
+    throw err
+  }
   const events = new EventEmitter()
+  child.on('exit', sandbox.cleanup)
+  if (o.sandboxHome != null)
+    child.on('error', (err) => {
+      sandbox.cleanup()
+      events.emit('stderr', `pi adapter: ${err.message}\n`)
+    })
   const norm = createNormalizer()
   // Split on LF only: pi's records may hold U+2028/U+2029, which readline splits on.
   let buf = ''
@@ -143,11 +206,16 @@ function open(o) {
     norm.start()
     return write({ type: 'prompt', message: text })
   }
-  return { child, events, norm, write, send }
+  // A close ends the attempt even if pi is slow to die or ignores the signal.
+  const close = (signal) => {
+    child.kill(signal)
+    sandbox.cleanup()
+  }
+  return { child, events, norm, write, send, close }
 }
 
 export function startSession(o) {
-  const { child, events, norm, write, send } = open(o)
+  const { child, events, norm, write, send, close } = open(o)
   return {
     pid: child.pid,
     events,
@@ -160,14 +228,12 @@ export function startSession(o) {
       norm.abort()
       return write({ type: 'abort' })
     },
-    close(signal) {
-      child.kill(signal)
-    },
+    close,
   }
 }
 
 export function runOnce(o) {
-  const { child, events, send } = open(o)
+  const { child, events, send, close } = open(o)
   const all = []
   let outcome = null
   let stderr = ''
@@ -181,5 +247,5 @@ export function runOnce(o) {
   events.on('stderr', (s) => (stderr += s))
   const done = new Promise((resolve) => child.on('close', (code) => resolve({ code, outcome, events: all, stderr })))
   send(o.prompt ?? '')
-  return { pid: child.pid, events, done, close: (signal) => child.kill(signal) }
+  return { pid: child.pid, events, done, close }
 }
