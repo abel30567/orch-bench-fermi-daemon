@@ -54,7 +54,8 @@ for lane in "$LANE_DIR"/*(N/); do
 		rm -rf "$lane"
 	fi
 done
-live=$(ls -d "$LANE_DIR"/*(N/) 2>/dev/null | wc -l | tr -d ' ')
+lanes=("$LANE_DIR"/*(N/)) # count the glob itself: `ls -d` with no args lists "."
+live=${#lanes}
 
 # --- 2. Optional run budget guardrail (opt-in via MAX_RUNS_PER_HOUR > 0) -----
 if ((MAX_RUNS_PER_HOUR > 0)); then
