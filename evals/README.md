@@ -44,6 +44,9 @@ error or a non-localhost URL. `--out` defaults to `runs/evals-<timestamp>`.
    its MCP servers from `~/.pi/agent/mcp.json`, so the pi adapter runs with that
    HOME, writes the MCP config there (refusing any non-localhost URL) and copies
    in only `~/.pi/agent/auth.json`, deleted when pi exits (`harness/pi.mjs`).
+   If a proxied stream breaks (e.g. the target or the harness drops the
+   long-lived SSE `GET /mcp`), the proxy tears down both sides and adds one
+   non-fatal `{ type: 'note', source: 'mcp-proxy', detail }` event to the trace.
 4. Enqueues `inbound` through the channel webhook, the same way the bridge does.
 5. Runs one drain through the adapter (`runOnce`, `prompts/drain.md` as the
    prompt, rendered with the eval overlay `fixtures/prompt-overlay.json`: owner
