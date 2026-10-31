@@ -6,7 +6,8 @@
 //   node bin/run-once.mjs --prompt prompts/drain.md --log runs/<ts>.log \
 //     [--lane lanes/<n>] [--session session.id] [--model M] [--max-turns N] [--timeout-s S]
 //
-// --log      raw harness output (stream-json) plus stderr, appended
+// --log      raw harness output (stream-json) plus stderr, appended; a harness that cannot
+//            be spawned leaves `run-once: spawn error: <message>` here (exit 127)
 // --lane     lane dir from poll.sh's acquire_lane; removed when this process exits
 // --session  resume the session id in this file (if any), then store the run's id there
 // --timeout-s watchdog: SIGTERM the harness after S seconds, SIGKILL 2s later (exit 124)
@@ -64,7 +65,14 @@ const run = harness.runOnce({
   settingSources: SETTING_SOURCES,
   resume: resume || undefined,
 })
-note(`harness pid ${run.pid}`)
+if (run.pid != null) note(`harness pid ${run.pid}`)
+
+// poll.sh discards our stdout and stderr, so the run log is the only record of why.
+let spawnFailed = false
+run.events.on('spawn_error', (err) => {
+  spawnFailed = true
+  note(`spawn error: ${err.message}`)
+})
 
 let sessionId = null
 run.events.on('raw', (line) => {
@@ -101,4 +109,4 @@ clearTimeout(watchdog)
 clearTimeout(killTimer)
 if (o.session && sessionId && !timedOut) writeFileSync(o.session, sessionId + '\n')
 note(`exit ${timedOut ? 'watchdog' : code}`)
-out.end(() => process.exit(timedOut ? 124 : (code ?? 1)))
+out.end(() => process.exit(timedOut ? 124 : spawnFailed ? 127 : (code ?? 1)))

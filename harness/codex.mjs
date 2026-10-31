@@ -378,6 +378,7 @@ export function runOnce(o) {
   events.on('stderr', (s) => (stderr += s))
   norm.start()
   pipe(child, events, (j) => norm.normalize(j).forEach((ev) => events.emit('event', ev)))
+  child.on('error', (err) => child.pid == null && events.emit('spawn_error', err))
   const done = new Promise((resolve) => child.on('close', (code) => resolve({ code, outcome, events: all, stderr })))
   child.stdin.end(o.prompt ?? '')
   return { pid: child.pid, events, done, close: (signal) => child.kill(signal) }
