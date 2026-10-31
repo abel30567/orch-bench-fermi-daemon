@@ -147,6 +147,19 @@ describe('AC1: pi runs in the sandbox HOME', () => {
     assert.equal(readFileSync(join(realHome, '.pi/agent/auth.json'), 'utf8'), AUTH)
   })
 
+  test('pre-seeded mcp.json and auth.json symlinks are replaced, not written through', async () => {
+    const outside = tmp()
+    mkdirSync(join(sandboxHome, '.pi/agent'), { recursive: true })
+    for (const f of ['mcp.json', 'auth.json']) {
+      writeFileSync(join(outside, f), 'untouched')
+      symlinkSync(join(outside, f), join(sandboxHome, '.pi/agent', f))
+    }
+    await runOnce({ ...opts(), prompt: 'turn' }).done
+    assert.deepEqual(JSON.parse(readProbe().mcp), { mcpServers: { fermi: { url: LOCAL } } })
+    assert.equal(readProbe().auth, AUTH)
+    for (const f of ['mcp.json', 'auth.json']) assert.equal(readFileSync(join(outside, f), 'utf8'), 'untouched')
+  })
+
   test('mcpConfig without sandboxHome, or the reverse, is refused', () => {
     assert.throws(() => runOnce({ ...opts({ sandboxHome: undefined }), prompt: 'turn' }), /mcpConfig without sandboxHome/)
     assert.throws(() => startSession(opts({ mcpConfig: undefined })), /sandboxHome without mcpConfig/)

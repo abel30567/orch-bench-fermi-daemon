@@ -138,9 +138,12 @@ function prepareSandbox({ mcpConfig, sandboxHome }) {
   // .native: it resolves a symlinked .pi and the on-disk case of a path on a case-insensitive volume.
   if (existsSync(realAgentDir) && realpathSync.native(agentDir) === realpathSync.native(realAgentDir))
     throw new Error('sandboxHome is the real HOME (see harness/pi.mjs)')
-  writeFileSync(join(agentDir, 'mcp.json'), JSON.stringify(config, null, 2) + '\n')
+  const mcp = join(agentDir, 'mcp.json')
   const auth = join(agentDir, 'auth.json')
   const realAuth = join(realAgentDir, 'auth.json')
+  // A pre-seeded file may be a symlink, and writing through it would land outside the sandbox.
+  for (const f of [mcp, auth]) rmSync(f, { force: true })
+  writeFileSync(mcp, JSON.stringify(config, null, 2) + '\n')
   if (existsSync(realAuth)) copyFileSync(realAuth, auth)
   return { env: { HOME: home, PI_CODING_AGENT_DIR: agentDir }, cleanup: () => rmSync(auth, { force: true }) }
 }
