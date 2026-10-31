@@ -1,11 +1,13 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
+import { once } from 'node:events'
 import http from 'node:http'
+import net from 'node:net'
 import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { startMcpProxy } from '../evals/lib/mcp-proxy.mjs'
-import { serve, sleep } from '../evals/lib/net.mjs'
+import { sendJson, serve, sleep } from '../evals/lib/net.mjs'
 import { runAttempt } from '../evals/lib/runner.mjs'
 import * as fake from '../evals/harness/fake.mjs'
 
@@ -91,14 +93,11 @@ describe('mcp proxy stream errors', () => {
     await upstream.close()
   })
 
-  test('a client gone before the upstream answers does not leak the upstream stream', async () => {
-    let answer
+  test('a client gone before the upstream answers aborts the upstream request and is no error', async () => {
+    let asked = false
     let closed = 0
     const upstream = await serve((req, res) => {
-      answer = () => {
-        res.writeHead(200, SSE)
-        res.write('data: late\n\n')
-      }
+      asked = true
       res.on('close', () => closed++)
     })
     const errors = []
@@ -106,14 +105,130 @@ describe('mcp proxy stream errors', () => {
     try {
       const req = http.get(`${proxy.url}/mcp`)
       req.on('error', () => {})
-      await until(() => answer)
+      await until(() => asked)
       req.destroy()
-      await sleep(30)
-      answer()
       await until(() => closed)
       assert.equal(closed, 1)
+      await sleep(30)
       assert.deepEqual(errors, [])
     } finally {
+      await proxy.close()
+      await upstream.close()
+    }
+  })
+
+  test('closing the proxy while the upstream has not answered aborts the upstream request', async () => {
+    let asked = false
+    let closed = 0
+    const upstream = await serve((req, res) => {
+      asked = true
+      res.on('close', () => closed++)
+    })
+    const errors = []
+    const proxy = await startMcpProxy({ target: upstream.url, onError: (e) => errors.push(e) })
+    http.get(`${proxy.url}/mcp`).on('error', () => {})
+    await until(() => asked)
+    await proxy.close()
+    await until(() => closed)
+    assert.equal(closed, 1)
+    await upstream.close()
+    await sleep(30)
+    assert.deepEqual(errors, [])
+  })
+
+  // A proxy in front of a target that floods GET /mcp, counting the upstream closes.
+  async function floodedProxy() {
+    let upstreamClosed = 0
+    const upstream = await serve((req, res) => {
+      res.writeHead(200, SSE)
+      res.on('close', () => upstreamClosed++)
+      const flood = () => {
+        while (!res.destroyed && res.write(`data: ${'x'.repeat(1024)}\n\n`));
+      }
+      res.on('drain', flood)
+      flood()
+    })
+    const errors = []
+    const proxy = await startMcpProxy({ target: upstream.url, onError: (e) => errors.push(e) })
+    const close = async () => {
+      await proxy.close()
+      await upstream.close()
+    }
+    return { proxy, errors, close, upstreamClosed: () => upstreamClosed }
+  }
+
+  test('a client socket reset is reported once, and closes the upstream stream', async () => {
+    const { proxy, errors, close, upstreamClosed } = await floodedProxy()
+    try {
+      const client = net.connect(proxy.port, '127.0.0.1')
+      client.on('error', () => {})
+      client.write('GET /mcp HTTP/1.1\r\nhost: localhost\r\n\r\n')
+      await once(client, 'data')
+      client.resetAndDestroy()
+      await until(() => errors.length && upstreamClosed())
+      await sleep(30)
+      assert.equal(errors.length, 1)
+      assert.match(errors[0].code, /^(ECONNRESET|EPIPE)$/)
+      assert.equal(upstreamClosed(), 1)
+    } finally {
+      await close()
+    }
+  })
+
+  test('a client response failure keeps its own message', async () => {
+    let proxyRes
+    const { proxy, errors, close, upstreamClosed } = await floodedProxy()
+    proxy.server.prependListener('request', (req, res) => (proxyRes = res))
+    try {
+      const { res } = await openStream(`${proxy.url}/mcp`)
+      res.on('error', () => {})
+      proxyRes.destroy(new Error('boom'))
+      await until(() => errors.length && upstreamClosed())
+      await sleep(30)
+      assert.deepEqual(errors.map((e) => e.message), ['boom'])
+    } finally {
+      await close()
+    }
+  })
+
+  test('an error emitted on the client response is reported once', async () => {
+    let proxyRes
+    const { proxy, errors, close, upstreamClosed } = await floodedProxy()
+    proxy.server.prependListener('request', (req, res) => (proxyRes = res))
+    try {
+      const { res } = await openStream(`${proxy.url}/mcp`)
+      res.on('error', () => {})
+      proxyRes.emit('error', new Error('emitted'))
+      await until(() => errors.length && upstreamClosed())
+      await sleep(30)
+      assert.deepEqual(errors.map((e) => e.message), ['emitted'])
+    } finally {
+      await close()
+    }
+  })
+
+  test('a keep-alive socket does not collect a listener per request', async () => {
+    const upstream = await serve((req, res) => sendJson(res, 200, { ok: true }))
+    const proxy = await startMcpProxy({ target: upstream.url })
+    const agent = new http.Agent({ keepAlive: true, maxSockets: 1 })
+    const get = () =>
+      new Promise((resolve, reject) => {
+        http.get(`${proxy.url}/mcp`, { agent }, (res) => res.resume().on('end', resolve)).on('error', reject)
+      })
+    const sockets = new Set()
+    let listeners = 0
+    proxy.server.on('request', (req) => {
+      sockets.add(req.socket)
+      listeners = Math.max(listeners, req.socket.listenerCount('error'))
+    })
+    try {
+      await get()
+      const first = listeners
+      for (let i = 0; i < 5; i++) await get()
+      assert.equal(sockets.size, 1)
+      assert.equal(listeners, first)
+    } finally {
+      agent.destroy()
       await proxy.close()
       await upstream.close()
     }

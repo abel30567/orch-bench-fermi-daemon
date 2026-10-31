@@ -47,7 +47,10 @@ error or a non-localhost URL. `--out` defaults to `runs/evals-<timestamp>`.
    If an upstream or client stream fails (the target's SSE `GET /mcp` cut mid-run,
    say), the proxy destroys both sides and the attempt carries on: `trace.jsonl`
    gets `{ "type": "note", "source": "mcp-proxy", "detail": "<error message>" }`,
-   which grades nothing. A client simply hanging up leaves no note.
+   which grades nothing. A client simply hanging up leaves no note, whether or not
+   the target has answered yet; its socket failing (a TCP reset, say) leaves one.
+   TCP cannot tell the two apart while data is in flight: a client hanging up as the
+   proxy writes gets `EPIPE` or `ECONNRESET` and counts as a failure.
 4. Enqueues `inbound` through the channel webhook, the same way the bridge does.
 5. Runs one drain through the adapter (`runOnce`, `prompts/drain.md` as the
    prompt, rendered with the eval overlay `fixtures/prompt-overlay.json`: owner

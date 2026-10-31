@@ -7,16 +7,30 @@ import { Readable, pipeline } from 'node:stream'
 import { readBody, sendJson, serve, sleep } from './net.mjs'
 
 const HOP = new Set(['host', 'connection', 'content-length', 'transfer-encoding', 'keep-alive'])
-// A client hanging up (or being closed with the proxy) is the normal end of a long-lived stream, not an error.
+// How pipeline sees any client leaving: a hang-up (or the proxy closing) is the normal end
+// of a long-lived stream, a failure of the client socket only shows up on the socket itself.
 const CLIENT_GONE = new Set(['ERR_STREAM_PREMATURE_CLOSE', 'ERR_STREAM_DESTROYED'])
 
 export async function startMcpProxy({ target, faults = {}, onError = () => {} }) {
   const report = (err) => {
+    if (!err) return
     try {
       onError(err)
     } catch {}
   }
   return serve(async (req, res) => {
+    const { socket } = req
+    const upstreamAbort = new AbortController()
+    let clientErr
+    const onClientErr = (err) => {
+      clientErr = err
+    }
+    socket.once('error', onClientErr)
+    res.once('close', () => {
+      socket.off('error', onClientErr)
+      upstreamAbort.abort()
+    })
+
     const body = req.method === 'POST' ? await readBody(req) : undefined
     let msg = null
     try {
@@ -28,21 +42,19 @@ export async function startMcpProxy({ target, faults = {}, onError = () => {} })
       return sendJson(res, 200, { jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text: String(fault.error) }], isError: true } })
 
     const headers = Object.fromEntries(Object.entries(req.headers).filter(([k]) => !HOP.has(k)))
-    const up = await fetch(new URL(req.url, target), { method: req.method, headers, body }).catch((err) => {
+    const { signal } = upstreamAbort
+    const up = await fetch(new URL(req.url, target), { method: req.method, headers, body, signal }).catch((err) => {
+      if (signal.aborted) return null // the client left while the target was answering
       report(err)
       throw err
     })
-    if (res.destroyed) return up.body?.cancel().catch(() => {}) // the client left while the target was answering
+    if (!up) return report(clientErr)
     const out = {}
     up.headers.forEach((v, k) => !HOP.has(k) && k !== 'content-encoding' && (out[k] = v))
     res.writeHead(up.status, out)
     if (!up.body) return res.end()
-    const upstream = Readable.fromWeb(up.body)
-    // Late errors, after pipeline has settled and dropped its own listeners.
-    upstream.on('error', () => {})
-    res.on('error', () => {})
-    pipeline(upstream, res, (err) => {
-      if (err && !CLIENT_GONE.has(err.code)) report(err)
+    pipeline(Readable.fromWeb(up.body), res, (err) => {
+      report(err && (CLIENT_GONE.has(err.code) || err.name === 'AbortError') ? clientErr : err)
     })
   })
 }
