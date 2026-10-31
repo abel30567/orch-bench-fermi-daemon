@@ -11,7 +11,7 @@ DAEMON_HOME="$HOME/fermi-daemon"
 cd "$DAEMON_HOME" || exit 1
 # NOTE: do not export ANTHROPIC_API_KEY here — claude prefers it over the
 # Max login and it disables claude.ai connectors (Fermi tools) entirely.
-source ./.env # FERMI_URL, FERMI_BEARER_TOKEN (+ optional overrides below)
+source ./.env # FERMI_URL, FERMI_BEARER_TOKEN, NODE_BIN (+ optional overrides below)
 
 MAX_CONCURRENT="${MAX_CONCURRENT:-5}"        # parallel drain lanes
 MAX_RUN_SECONDS="${MAX_RUN_SECONDS:-1200}"   # per-lane watchdog (20min). Long enough for real
@@ -24,7 +24,7 @@ MAX_TURNS="${MAX_TURNS:-50}"
 MODEL="${MODEL:-claude-opus-4-6[1m]}"        # model for daemon claude -p runs (1M-context Opus 4.6)
 # Allowed tools and setting sources match the warm worker (lib/run-policy.mjs).
 LANE_DIR="$DAEMON_HOME/lanes"
-mkdir -p "$LANE_DIR"
+mkdir -p "$LANE_DIR" logs runs
 rm -f "$DAEMON_HOME/run.lock" 2>/dev/null # legacy single-lock cleanup
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >>logs/poll.log }
@@ -79,10 +79,27 @@ acquire_lane() {
 	return 1
 }
 
+# The cold path is the fallback for when the warm worker is down, so it must not
+# fail silently: resolve node as $NODE_BIN, otherwise from PATH, and refuse to
+# spawn without node >= 22 (launchd's PATH may hold an older node, or none).
+# Sets node_bin for spawn_run; call it first, so a refusal logs just its one line.
+require_node() {
+	local prompt_file="$1"
+	local version major
+	node_bin="${NODE_BIN:-$(command -v node)}"
+	version=$("$node_bin" --version 2>/dev/null)
+	major="${${version#v}%%.*}"
+	if [[ "$major" != <-> ]] || (( major < 22 )); then
+		log "bin/run-once.mjs needs node >= 22 (set NODE_BIN in .env) — not spawning $prompt_file"
+		exit 1
+	fi
+}
+
 # Detached nohup spawn from the clean dir (EINTR-safe) of bin/run-once.mjs,
 # which runs the harness, enforces the MAX_RUN_SECONDS watchdog and removes the
 # lane on exit. Only heartbeat runs pass --session (resume from and store
-# session.id): concurrent drain runs must not race on it.
+# session.id): concurrent drain runs must not race on it. run-once's own stdout
+# and stderr (a crash before it reaches --log) are appended to the run's log too.
 spawn_run() {
 	local prompt_file="$1"
 	shift
@@ -95,14 +112,14 @@ spawn_run() {
 	if [[ "$prompt_file" == drain.md ]]; then
 		nohup python3 "$DAEMON_HOME/narrator.py" "runs/$ts.log" >/dev/null 2>&1 &
 	fi
-	nohup node "$DAEMON_HOME/bin/run-once.mjs" \
+	nohup "$node_bin" "$DAEMON_HOME/bin/run-once.mjs" \
 		--prompt "prompts/$prompt_file" \
 		--log "runs/$ts.log" \
 		--lane "$lane" \
 		--model "$MODEL" \
 		--max-turns "$MAX_TURNS" \
 		--timeout-s "$MAX_RUN_SECONDS" \
-		"$@" >/dev/null 2>&1 &
+		"$@" >>"runs/$ts.log" 2>&1 &
 	echo $! >"$lane/pid"
 	log "spawned $prompt_file in lane ${lane:t} (pid $(cat "$lane/pid"), log runs/$ts.log)"
 }
@@ -122,6 +139,7 @@ if ! pgrep -f 'warm-worker\.mjs' >/dev/null 2>&1; then
 		(( free < 0 )) && free=0
 		to_spawn=$(( pending < free ? pending : free ))
 		if (( to_spawn > 0 )); then
+			require_node drain.md
 			log "reactive (fallback, warm worker down): $pending pending, spawning $to_spawn"
 			for (( k = 0; k < to_spawn; k++ )); do
 				spawn_run drain.md
@@ -141,6 +159,7 @@ if ! pgrep -f 'warm-worker\.mjs' >/dev/null 2>&1; then
 		last_heartbeat=0
 		[[ -f last-heartbeat ]] && last_heartbeat=$(stat -f %m last-heartbeat)
 		if (( now - last_heartbeat > HEARTBEAT_SECONDS )); then
+			require_node heartbeat.md
 			log "heartbeat: spawning check-in (warm worker down — fallback sweep)"
 			spawn_run heartbeat.md --session session.id
 			touch last-heartbeat

@@ -21,7 +21,10 @@ cloudflared tunnel.
   `bin/run-once.mjs`, each running `prompts/drain.md` to claim and complete one
   task at a time. Lane claiming is race-safe via `mkdir`, and a per-lane
   watchdog kills runs over `MAX_RUN_SECONDS`. Cold runs get the warm worker's
-  allowed tools and setting sources (`lib/run-policy.mjs`).
+  allowed tools and setting sources (`lib/run-policy.mjs`). Cold runs need
+  node >= 22 (`NODE_BIN` in `.env`, otherwise `node` from PATH): without it
+  `poll.sh` logs one error to `logs/poll.log`, exits non-zero and spawns nothing.
+  A run's own output and any crash land in `runs/<ts>.log`.
 - **`warm-worker.mjs`** — an optional long-lived `claude` process
   (`com.fermi.warm-worker`) that keeps its MCP + Fermi connector warm so replies
   land in seconds instead of paying the cold-start cost on every message. When
