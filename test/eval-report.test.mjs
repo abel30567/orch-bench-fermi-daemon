@@ -28,6 +28,7 @@ const res = (scenario, category, pass, over = {}) => ({
   failed: pass ? [] : [{ assertion: { called: 'channel_send' }, message: 'not called' }],
   latencyMs: 1000,
   toolCalls: ['task_claim', 'context_bootstrap', 'channel_send', 'task_complete'],
+  internalToolCalls: [],
   tokens: { input: 100, output: 10 },
   costUsd: 0.01,
   errorKinds: [],
@@ -146,6 +147,7 @@ describe('report contents', () => {
     assert.equal(r.ratios.p95Latency, 2)
     assert.equal(r.stats.baseline.toolCallsPerTask, 4)
     assert.equal(r.stats.candidate.toolCallsPerTask, 5)
+    assert.equal(r.stats.candidate.internalToolCallsPerTask, 0)
     assert.equal(r.ratios.toolCalls, 1.25)
     assert.deepEqual(r.stats.candidate.errorKinds, { tool_error: 3 })
     assert.deepEqual(r.stats.baseline.errorKinds, {})
