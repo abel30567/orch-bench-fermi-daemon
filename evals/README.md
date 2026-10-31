@@ -53,7 +53,9 @@ error or a non-localhost URL. `--out` defaults to `runs/evals-<timestamp>`.
    A timeout or a `turn_end` with `ok: false` adds a failed assertion, so such an
    attempt never passes.
 
-Per attempt, `<out>/<scenario>/<n>/` holds `trace.jsonl` (normalized events),
+Per attempt, `<out>/<scenario>/<n>/` holds `trace.jsonl` (normalized events;
+a proxied `/mcp` stream that the target or the harness cuts mid-way is a non-fatal
+`{ "type": "note", "source": "mcp-proxy", "detail" }` event, not a runner crash),
 `raw.log` (native harness output), `state.json`, `mcp.json` and, with
 `--worker`, `wrangler.log`. These hold transcripts, so never publish them.
 `<out>/results.json` (schema: `schema/results.schema.json`) has one entry per

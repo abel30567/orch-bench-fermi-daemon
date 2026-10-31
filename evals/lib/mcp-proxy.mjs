@@ -1,13 +1,15 @@
 // The harness's `fermi` MCP server: a localhost pass-through to the eval target's
 // /mcp that injects a scenario's faults. `faults` maps a bare tool name to
 // { error?: string, latencyMs?: number }: latency delays the call, error answers
-// it with an isError result without reaching the target.
-import { Readable } from 'node:stream'
+// it with an isError result without reaching the target. A response stream that
+// breaks mid-way (the target or the client hangs up a long-lived SSE GET) tears
+// down both sides and goes to `onError(err)` instead of crashing the run.
+import { Readable, pipeline } from 'node:stream'
 import { readBody, sendJson, serve, sleep } from './net.mjs'
 
 const HOP = new Set(['host', 'connection', 'content-length', 'transfer-encoding', 'keep-alive'])
 
-export async function startMcpProxy({ target, faults = {} }) {
+export async function startMcpProxy({ target, faults = {}, onError = () => {} }) {
   return serve(async (req, res) => {
     const body = req.method === 'POST' ? await readBody(req) : undefined
     let msg = null
@@ -21,10 +23,15 @@ export async function startMcpProxy({ target, faults = {} }) {
 
     const headers = Object.fromEntries(Object.entries(req.headers).filter(([k]) => !HOP.has(k)))
     const up = await fetch(new URL(req.url, target), { method: req.method, headers, body })
+    // pipeline() into an already-closed response never calls back, so drop the upstream body here.
+    if (res.destroyed) {
+      await up.body?.cancel().catch(() => {})
+      return onError(new Error('client closed the connection before the upstream response'))
+    }
     const out = {}
     up.headers.forEach((v, k) => !HOP.has(k) && k !== 'content-encoding' && (out[k] = v))
     res.writeHead(up.status, out)
-    if (up.body) Readable.fromWeb(up.body).pipe(res)
-    else res.end()
+    if (!up.body) return res.end()
+    pipeline(Readable.fromWeb(up.body), res, (err) => err && onError(err))
   })
 }
