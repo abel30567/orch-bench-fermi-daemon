@@ -120,6 +120,8 @@ export function normalizeEvent(j, { since } = {}) {
 
 // Split the child's stdout into lines; emit each raw line, then its normalized events.
 function pipeEvents(child, events, since) {
+  // claude may exit before reading its prompt: its stdin then fails with EPIPE.
+  for (const s of [child.stdin, child.stdout, child.stderr]) s.on('error', () => {})
   let buf = ''
   child.stdout.on('data', (d) => {
     buf += d.toString()
