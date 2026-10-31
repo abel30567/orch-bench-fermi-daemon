@@ -137,6 +137,8 @@ function spawnCodex(args, o) {
   }
   child.on('error', cleanup) // a spawn failure (missing bin, bad cwd)
   child.on('close', cleanup)
+  // codex may exit before reading its stdin: a write then fails with EPIPE ('close' follows).
+  for (const s of [child.stdin, child.stdout, child.stderr]) s.on('error', () => {})
   return child
 }
 
@@ -276,8 +278,9 @@ export function startSession(o) {
   const events = new EventEmitter()
   const emit = (ev) => events.emit('event', ev)
   const items = itemTracker()
+  let closed = false
   const write = (msg) => {
-    if (!child.stdin.writable) return false
+    if (closed || !child.stdin.writable) return false
     child.stdin.write(JSON.stringify(msg) + '\n')
     return true
   }
@@ -329,6 +332,7 @@ export function startSession(o) {
 
   // The process is gone: fail whatever still waits on an answer (initialize, turn/start).
   child.on('close', () => {
+    closed = true
     for (const p of pending.values()) p.reject(new Error('codex app-server exited'))
     pending.clear()
   })
@@ -370,10 +374,10 @@ export function startSession(o) {
     pid: child.pid,
     events,
     get alive() {
-      return child.stdin.writable
+      return !closed && child.stdin.writable
     },
     send(text) {
-      if (!child.stdin.writable) return false
+      if (closed || !child.stdin.writable) return false
       const t = (turn = { id: null, since: Date.now(), last: '', interrupt: false })
       usageAtStart = usage
       ready
@@ -411,9 +415,23 @@ export function runOnce(o) {
   })
   events.on('stderr', (s) => (stderr += s))
   norm.start()
+  const since = Date.now()
   setImmediate(() => events.emit('event', { type: 'init', harness: name, version: null, model: o.model ?? null, tools: CODEX_BUILTINS }))
   pipe(child, events, (j) => norm.normalize(j).forEach((ev) => events.emit('event', ev)))
-  const done = new Promise((resolve) => child.on('close', (code) => resolve({ code, outcome, events: all, stderr })))
+  // 'close': stdout and stderr are drained, so a real turn_end and all of stderr came first.
+  // A codex that exits (or never spawns) without ending its turn crashed, unless we killed it.
+  let killed = false
+  const done = new Promise((resolve) =>
+    child.on('close', (code, signal) => {
+      if (!outcome && !killed)
+        events.emit('event', { type: 'turn_end', ok: false, kind: 'crash', detail: `codex exited (${code ?? signal}) without ending the turn`, durationMs: Date.now() - since, raw: null })
+      resolve({ code, outcome, events: all, stderr })
+    }),
+  )
   child.stdin.end(o.prompt ?? '')
-  return { pid: child.pid, events, done, close: (signal) => child.kill(signal) }
+  const close = (signal) => {
+    killed = true
+    child.kill(signal)
+  }
+  return { pid: child.pid, events, done, close }
 }
