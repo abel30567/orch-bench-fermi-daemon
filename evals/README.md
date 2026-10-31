@@ -201,7 +201,7 @@ It also checks every URL it hands out (worker env, target, MCP config).
     "mac": [{ "tool": "mac_shell", "match": "uptime", "result": "up 3 days" }],     // fake Mac canned results
     "tools": [{ "tool": "fs_read", "match": "todo", "result": { "content": "…" } }], // fake target canned results
     "secrets": [{ "name": "EXAMPLE_API_KEY", "value": "exk-eval-…" }],              // set via secret_set, resolvable
-    "history": [{ "role": "assistant", "text": "Reply yes to place the call.", "minutes_ago": 2 }] // fake target only
+    "history": [{ "role": "assistant", "text": "Reply yes to place the call.", "minutes_ago": 2 }] // the inbound chat's transcript (real worker: MCP-24 `conversation`)
   },
   "inbound": { "channel": "sl", "sender": "U0EVALOWNER", "chat": "D0EVAL", "text": "…",
                "attachment": { "kind": "image", "file": "x.jpg" } },               // optional
