@@ -54,7 +54,10 @@ for lane in "$LANE_DIR"/*(N/); do
 		rm -rf "$lane"
 	fi
 done
-live=$(ls -d "$LANE_DIR"/*(N/) 2>/dev/null | wc -l | tr -d ' ')
+# Count via a glob array: `ls -d` on an empty (N) glob gets no args and lists
+# `.`, which counted one phantom lane and starved MAX_CONCURRENT=1.
+lanes=("$LANE_DIR"/*(N/))
+live=${#lanes}
 
 # --- 2. Optional run budget guardrail (opt-in via MAX_RUNS_PER_HOUR > 0) -----
 if ((MAX_RUNS_PER_HOUR > 0)); then
