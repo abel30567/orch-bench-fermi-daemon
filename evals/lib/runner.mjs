@@ -69,7 +69,12 @@ export async function runAttempt({ scenario, attempt, harness, model, worker, ti
     assertLocalUrls({ target: target.url })
     await target.seed(seedFixture(scenario.fixtures, scenario.inbound))
     await seedSecrets(target.url, scenario.fixtures?.secrets)
-    const proxy = await startMcpProxy({ target: target.url, faults: scenario.faults })
+    const record = (ev) => {
+      trace.push(ev)
+      appendFileSync(join(dir, 'trace.jsonl'), JSON.stringify(ev) + '\n')
+    }
+    // Proxy stream errors (e.g. the target cutting the SSE GET at shutdown) are non-fatal trace notes.
+    const proxy = await startMcpProxy({ target: target.url, faults: scenario.faults, onNote: record })
     closers.push(proxy.close)
     const mcpConfig = { mcpServers: { fermi: { type: 'http', url: `${proxy.url}/mcp` } } }
     assertLocalUrls(Object.fromEntries(Object.entries(mcpConfig.mcpServers).map(([k, s]) => [`mcp:${k}`, s.url])))
@@ -100,10 +105,7 @@ export async function runAttempt({ scenario, attempt, harness, model, worker, ti
     const run = scenario.session
       ? runSession(harness, { ...harnessOpts, systemPrompt: drainPrompt, script: scenario.fake?.turns }, { turns: scenario.session, inbound: scenario.inbound })
       : harness.runOnce({ ...harnessOpts, prompt: drainPrompt, script: scenario.fake?.script }) // the fake harness's script; real adapters ignore it
-    run.events.on('event', (ev) => {
-      trace.push(ev)
-      appendFileSync(join(dir, 'trace.jsonl'), JSON.stringify(ev) + '\n')
-    })
+    run.events.on('event', record)
     run.events.on('raw', (line) => appendFileSync(join(dir, 'raw.log'), line + '\n'))
     run.events.on('stderr', (s) => appendFileSync(join(dir, 'stderr.log'), s))
     let timer
