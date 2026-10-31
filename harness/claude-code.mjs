@@ -15,6 +15,9 @@
 //   sandbox             spawn through harness/sandbox.mjs (eval mode)
 //   runOnce only: skipPermissions (--dangerously-skip-permissions), maxTurns (--max-turns),
 //                 settingSources (--setting-sources), resume (--resume <session id>)
+// A runOnce whose harness exits without a result ends as turn_end { ok: false, kind: 'crash' }
+// once its output is drained, unless the caller killed it; stream errors (EPIPE on a write
+// after the harness died) are ignored, never thrown.
 
 import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
@@ -77,6 +80,8 @@ function spawnHarness(args, o) {
   const bin = o.bin || process.env.CLAUDE_BIN || join(process.env.HOME, '.local/bin/claude')
   const [cmd, argv] = o.sandbox ? o.sandbox.wrap(bin, args) : [bin, args]
   const child = spawn(cmd, argv, { cwd: o.cwd, env, stdio })
+  // The harness may exit before reading a prompt: its stdin then fails with EPIPE.
+  for (const s of [child.stdin, child.stdout, child.stderr]) s.on('error', () => {})
   if (o.tokenPipe != null && child.stdio[3]) {
     child.stdio[3].on('error', () => {}) // the child may exit before reading it
     child.stdio[3].end(o.tokenPipe + '\n')
@@ -180,13 +185,25 @@ export function runOnce(o) {
   const all = []
   let outcome = null
   let stderr = ''
+  let killed = false // a harness we kill (a timeout, a breach) did not crash
   events.on('event', (ev) => {
     all.push(ev)
     if (ev.type === 'turn_end') outcome = ev
   })
   events.on('stderr', (s) => (stderr += s))
+  events.on('error', (e) => (stderr += `claude-code adapter: ${e.message}\n`)) // never spawned: 'close' follows
   pipeEvents(child, events, () => since)
-  const done = new Promise((resolve) => child.on('close', (code) => resolve({ code, outcome, events: all, stderr })))
+  // 'close': stdout and stderr are drained, so a real turn_end and all of stderr came first.
+  const done = new Promise((resolve) =>
+    child.on('close', (code, signal) => {
+      if (!outcome && !killed) events.emit('event', { type: 'turn_end', ok: false, kind: 'crash', detail: `harness exited (${code ?? signal}) mid-turn`, durationMs: Date.now() - since, raw: null })
+      resolve({ code, outcome, events: all, stderr })
+    }),
+  )
   child.stdin.end(o.prompt ?? '')
-  return { pid: child.pid, events, done, close: (signal) => child.kill(signal) }
+  const close = (signal) => {
+    killed = true
+    child.kill(signal)
+  }
+  return { pid: child.pid, events, done, close }
 }

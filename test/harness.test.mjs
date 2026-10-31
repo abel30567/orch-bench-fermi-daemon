@@ -177,6 +177,38 @@ describe('AC2: recorded Claude stream → normalized events (golden)', () => {
     assert.equal(outcome, events.at(-1))
   })
 
+  test('runOnce: a harness that exits before reading stdin is a crash turn, never an uncaught EPIPE', async () => {
+    const bin = script(join(tmp(), 'claude'), 'echo "claude: died early" >&2; exit 3')
+    const { code, outcome, stderr } = await runOnce({ bin, prompt: 'x'.repeat(1 << 20) }).done // larger than the pipe buffer
+    assert.equal(code, 3)
+    assert.equal(outcome?.ok, false)
+    assert.equal(outcome.kind, 'crash')
+    assert.match(outcome.detail, /exited \(3\)/)
+    assert.match(stderr, /died early/)
+  })
+
+  test('runOnce: a missing binary is a crash turn too', async () => {
+    const { outcome, stderr } = await runOnce({ bin: join(tmp(), 'no-such-claude'), prompt: 'x' }).done
+    assert.equal(outcome?.kind, 'crash')
+    assert.match(stderr, /claude-code adapter: .*ENOENT/)
+  })
+
+  test('runOnce: a harness the caller kills did not crash', async () => {
+    const run = runOnce({ bin: script(join(tmp(), 'claude'), 'read line; exec sleep 30'), prompt: 'x\n' })
+    setTimeout(() => run.close('SIGTERM'), 100)
+    assert.equal((await run.done).outcome, null)
+  })
+
+  test('startSession: a harness that closes its stdin ends the session without an uncaught EPIPE', async () => {
+    const bin = script(join(tmp(), 'claude'), 'exec 0<&-; sleep 0.2; exit 3')
+    const s = startSession({ bin })
+    await new Promise((r) => setTimeout(r, 100))
+    assert.equal(s.send('x'.repeat(1 << 20)), true)
+    const [code] = await once(s.events, 'exit')
+    assert.equal(code, 3)
+    assert.equal(s.alive, false)
+  })
+
   test('bin, configDir, tokenFd and scrubSubprocessEnv reach the child', async () => {
     const dir = tmp()
     writeFileSync(join(dir, 'token'), 'tok-123')
