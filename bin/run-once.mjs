@@ -75,6 +75,8 @@ run.events.on('raw', (line) => {
   } catch {}
 })
 run.events.on('stderr', (s) => out.write(s))
+// e.g. ENOENT for a bad CLAUDE_BIN; poll.sh discards our stdio, so the reason goes to the log.
+run.events.on('error', (err) => note(`spawn error: ${err.message}`))
 
 // poll.sh's reaper SIGTERMs us on its own watchdog; take the harness down with us.
 for (const sig of ['SIGTERM', 'SIGINT']) {
