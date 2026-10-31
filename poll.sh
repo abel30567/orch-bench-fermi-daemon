@@ -11,7 +11,7 @@ DAEMON_HOME="$HOME/fermi-daemon"
 cd "$DAEMON_HOME" || exit 1
 # NOTE: do not export ANTHROPIC_API_KEY here — claude prefers it over the
 # Max login and it disables claude.ai connectors (Fermi tools) entirely.
-source ./.env # FERMI_URL, FERMI_BEARER_TOKEN (+ optional overrides below)
+source ./.env # FERMI_URL, FERMI_BEARER_TOKEN (+ optional overrides below, NODE_BIN)
 
 MAX_CONCURRENT="${MAX_CONCURRENT:-5}"        # parallel drain lanes
 MAX_RUN_SECONDS="${MAX_RUN_SECONDS:-1200}"   # per-lane watchdog (20min). Long enough for real
@@ -28,6 +28,22 @@ mkdir -p "$LANE_DIR"
 rm -f "$DAEMON_HOME/run.lock" 2>/dev/null # legacy single-lock cleanup
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >>logs/poll.log }
+
+# Node for bin/run-once.mjs: NODE_BIN from .env, else node on PATH. The cold
+# path is the fallback for when the warm worker is down, so a missing or too
+# old node must fail loudly (poll.log + non-zero exit), never spawn silently.
+NODE="${NODE_BIN:-$(command -v node)}"
+NODE_MIN_MAJOR=22
+require_node() {
+	local v
+	v=$("${NODE:-node}" -v 2>/dev/null)
+	v="${v#v}"
+	if [[ "${v%%.*}" == <-> ]] && (( ${v%%.*} >= NODE_MIN_MAJOR )); then
+		return 0
+	fi
+	log "ERROR: node '${NODE:-node}' is v${v:-unknown}; bin/run-once.mjs needs node >= $NODE_MIN_MAJOR (set NODE_BIN in .env) — not spawning $1"
+	exit 1
+}
 
 now=$(date +%s)
 
@@ -86,6 +102,7 @@ acquire_lane() {
 spawn_run() {
 	local prompt_file="$1"
 	shift
+	require_node "$prompt_file"
 	local lane
 	lane=$(acquire_lane) || { log "all $MAX_CONCURRENT lanes busy — deferring $prompt_file"; return 1; }
 	local ts
@@ -95,14 +112,14 @@ spawn_run() {
 	if [[ "$prompt_file" == drain.md ]]; then
 		nohup python3 "$DAEMON_HOME/narrator.py" "runs/$ts.log" >/dev/null 2>&1 &
 	fi
-	nohup node "$DAEMON_HOME/bin/run-once.mjs" \
+	nohup "$NODE" "$DAEMON_HOME/bin/run-once.mjs" \
 		--prompt "prompts/$prompt_file" \
 		--log "runs/$ts.log" \
 		--lane "$lane" \
 		--model "$MODEL" \
 		--max-turns "$MAX_TURNS" \
 		--timeout-s "$MAX_RUN_SECONDS" \
-		"$@" >/dev/null 2>&1 &
+		"$@" >>"runs/$ts.log" 2>&1 &
 	echo $! >"$lane/pid"
 	log "spawned $prompt_file in lane ${lane:t} (pid $(cat "$lane/pid"), log runs/$ts.log)"
 }
