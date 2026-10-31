@@ -96,9 +96,11 @@ const watchdog =
     killTimer = setTimeout(() => run.close('SIGKILL'), KILL_GRACE_MS)
   }, Number(o['timeout-s']) * 1000)
 
-const { code } = await run.done
+const { code, error } = await run.done
 clearTimeout(watchdog)
 clearTimeout(killTimer)
+// A harness that never spawned (missing bin) has no exit code: put the reason in the run log.
+if (error) note(`spawn error: ${error.message}`)
 if (o.session && sessionId && !timedOut) writeFileSync(o.session, sessionId + '\n')
 note(`exit ${timedOut ? 'watchdog' : code}`)
-out.end(() => process.exit(timedOut ? 124 : (code ?? 1)))
+out.end(() => process.exit(error ? 127 : timedOut ? 124 : (code ?? 1)))
