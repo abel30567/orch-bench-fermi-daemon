@@ -32,7 +32,7 @@ export function sendJson(res, status, body, headers = {}) {
   res.end(JSON.stringify(body))
 }
 
-// Start `handler` on 127.0.0.1 (port 0 = a free one). Resolves { url, port, close }.
+// Start `handler` on 127.0.0.1 (port 0 = a free one). Resolves { server, url, port, close }.
 export async function serve(handler, port = 0) {
   const server = http.createServer((req, res) =>
     Promise.resolve(handler(req, res)).catch((err) => {
@@ -46,6 +46,7 @@ export async function serve(handler, port = 0) {
   })
   const actual = server.address().port
   return {
+    server,
     port: actual,
     url: `http://127.0.0.1:${actual}`,
     close: () =>
