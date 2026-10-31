@@ -1,14 +1,20 @@
 // The harness's `fermi` MCP server: a localhost pass-through to the eval target's
 // /mcp that injects a scenario's faults. `faults` maps a bare tool name to
 // { error?: string, latencyMs?: number }: latency delays the call, error answers
-// it with an isError result without reaching the target.
+// it with an isError result without reaching the target. A failed exchange (the
+// long-lived SSE stream is cut when either side goes away) is never fatal: both
+// sides are destroyed and `onNote` gets one { type: 'note', source: 'mcp-proxy', detail }.
 import { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 import { readBody, sendJson, serve, sleep } from './net.mjs'
 
 const HOP = new Set(['host', 'connection', 'content-length', 'transfer-encoding', 'keep-alive'])
 
-export async function startMcpProxy({ target, faults = {} }) {
-  return serve(async (req, res) => {
+export async function startMcpProxy({ target, faults = {}, onNote = () => {} }) {
+  const note = (err) => onNote({ type: 'note', source: 'mcp-proxy', detail: String(err?.message ?? err) })
+  const relays = new Set()
+
+  async function forward(req, res) {
     const body = req.method === 'POST' ? await readBody(req) : undefined
     let msg = null
     try {
@@ -24,7 +30,26 @@ export async function startMcpProxy({ target, faults = {} }) {
     const out = {}
     up.headers.forEach((v, k) => !HOP.has(k) && k !== 'content-encoding' && (out[k] = v))
     res.writeHead(up.status, out)
-    if (up.body) Readable.fromWeb(up.body).pipe(res)
-    else res.end()
-  })
+    if (!up.body) return res.end()
+    const relay = pipeline(Readable.fromWeb(up.body), res)
+      .catch(note)
+      .finally(() => relays.delete(relay))
+    relays.add(relay)
+    await relay
+  }
+
+  const server = await serve((req, res) =>
+    forward(req, res).catch((err) => {
+      note(err)
+      throw err
+    }),
+  )
+  // Open relays settle once close() cuts their clients, so their notes land before it resolves.
+  return {
+    ...server,
+    close: async () => {
+      await server.close()
+      await Promise.all(relays)
+    },
+  }
 }

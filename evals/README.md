@@ -56,6 +56,9 @@ error or a non-localhost URL. `--out` defaults to `runs/evals-<timestamp>`.
 Per attempt, `<out>/<scenario>/<n>/` holds `trace.jsonl` (normalized events),
 `raw.log` (native harness output), `state.json`, `mcp.json` and, with
 `--worker`, `wrangler.log`. These hold transcripts, so never publish them.
+A proxied MCP exchange that breaks (say the SSE stream is cut at shutdown) adds one
+non-fatal `{ "type": "note", "source": "mcp-proxy", "detail": "<error message>" }`
+to `trace.jsonl`; assertions and results ignore it.
 `<out>/results.json` (schema: `schema/results.schema.json`) has one entry per
 attempt. `<out>/summary.json` has the totals and the pass rate per scenario.
 
