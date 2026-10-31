@@ -10,7 +10,8 @@
 //     in-flight turn while the session stays alive.
 //   runOnce({ prompt, ...same })
 //     → { events, done: Promise<{ code, outcome, events[], stderr }> }
-//     One prompt, one process; `outcome` is the run's turn_end (null if none).
+//     One prompt, one process; `outcome` is the run's turn_end: a harness that exits
+//     without one ends as kind 'crash' (null if the caller killed it).
 //
 // `events` is an EventEmitter:
 //   'event'  a normalized event (below)

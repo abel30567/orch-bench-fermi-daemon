@@ -9,6 +9,7 @@
 //               items, turn.completed / turn.failed).
 // Fixtures hold app-server notifications without ids (the fake fills in threadId,
 // turnId and turn.id), plus directives:
+//   (env FAKE_EARLY_EXIT=N: print to stderr and exit N before reading stdin, in either mode)
 //   {"$fake":"sleep","ms":N}   pause the replay (an interrupt drops the rest)
 //   {"$fake":"hang"}           never finish the turn
 //   {"$fake":"exit","code":N}  exit mid-turn (a crash)
@@ -122,6 +123,10 @@ async function exec() {
   process.exit(failed ? 1 : 0)
 }
 
+if (process.env.FAKE_EARLY_EXIT) {
+  process.stderr.write('fake codex: died before reading stdin\n')
+  process.exit(Number(process.env.FAKE_EARLY_EXIT))
+}
 if (process.argv[2] === 'app-server') appServer()
 else if (process.argv[2] === 'exec') exec()
 else {
