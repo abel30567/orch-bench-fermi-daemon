@@ -1,13 +1,16 @@
 // The real eval target: fermi-mcp's packages/worker/wrangler.eval.jsonc (MCP-11)
 // under `wrangler dev --local` from the checkout given by --worker, on a free
 // port with its own --persist-to dir, so every scenario attempt starts empty.
-// Seeding and dumping go through MCP-11's eval-seed.mjs / eval-dump.mjs.
+// Seeding and dumping go through MCP-11's eval-seed.mjs / eval-dump.mjs; MCP-24's
+// `conversation` section seeds fixtures.history through the real conversation store.
 import { execFile, spawn } from 'node:child_process'
 import { existsSync, mkdtempSync, openSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { freePort, sleep } from './net.mjs'
+
+export { seedFixture } from './scenario.mjs'
 
 const run = promisify(execFile)
 
@@ -53,8 +56,6 @@ export async function startWranglerTarget({ worker, env, logDir, bootTimeoutMs =
   return {
     url,
     async seed(fixture) {
-      // eval-seed.mjs has no conversation section yet; failing beats grading without the history.
-      if (fixture.history) throw new Error('fixtures.history is not supported by the eval worker seed (eval-seed.mjs) yet')
       const file = join(state, 'fixture.json')
       writeFileSync(file, JSON.stringify(fixture))
       await run(process.execPath, ['scripts/eval-seed.mjs', file, '--persist-to', state, '--url', url], { cwd })
