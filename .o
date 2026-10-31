@@ -1,0 +1,18 @@
+▶ AC1: HARNESS unset spawns claude with today's argv
+  ✔ default bin (~/.local/bin/claude) (361.6025ms)
+  ✔ CLAUDE_BIN picks the binary, argv unchanged (227.627333ms)
+  ✔ HARNESS selects the adapter; an unknown one is an error (0.626542ms)
+✔ AC1: HARNESS unset spawns claude with today's argv (362.027167ms)
+▶ DMN-5: HARNESS=pi spawns pi in RPC mode
+  ✔ PI_BIN picks the binary; argv is the pi trial's (199.805709ms)
+✔ DMN-5: HARNESS=pi spawns pi in RPC mode (199.911708ms)
+▶ AC2: recorded Claude stream → normalized events (golden)
+  ✔ normalizeEvent over the fixture equals the golden sequence (0.726083ms)
+  ✔ turn_end kind comes from classifyResult (11.288ms)
+  ✔ bareToolName strips MCP server prefixes (0.17525ms)
+  ✔ the warm worker writes the raw log and the normalized log for a drain turn (351.596584ms)
+  ✔ runOnce: box-runner argv, prompt on stdin, events plus outcome (246.17975ms)
+  ✔ bin, configDir, tokenFd and scrubSubprocessEnv reach the child (138.785542ms)
+✔ AC2: recorded Claude stream → normalized events (golden) (749.082167ms)
+▶ AC3: interrupt sends today's control_request and the session survives
+  ✔ adapter session: interrupt ends the turn, the next turn runs on the same process (1808.826334ms)
