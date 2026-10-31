@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { freePort, sleep } from './net.mjs'
+import { seedFixture as baseSeedFixture } from './scenario.mjs'
 
 const run = promisify(execFile)
 
@@ -15,6 +16,25 @@ export function workerDir(checkout) {
   for (const d of [join(checkout, 'packages/worker'), checkout])
     if (existsSync(join(d, 'wrangler.eval.jsonc'))) return d
   throw new Error(`no wrangler.eval.jsonc under ${checkout} (need a fermi-mcp checkout with MCP-11)`)
+}
+
+// The eval-seed fixture for this target: MCP-24's eval-seed.mjs seeds the
+// inbound chat's prior transcript through the real conversation store from a
+// `conversation: { channel, chat_id, sender, history: [{ role, text, minutes_ago? }] }`
+// section; `sender` is the inbound sender (the group member, for a group chat).
+export function seedFixture(fixtures = {}, inbound = null) {
+  const { history: _flat, ...fixture } = baseSeedFixture(fixtures, inbound)
+  const history = fixtures.history ?? []
+  if (!history.length) return fixture
+  return {
+    ...fixture,
+    conversation: {
+      channel: inbound?.channel,
+      chat_id: inbound?.chat,
+      ...(inbound?.sender != null && { sender: inbound.sender }),
+      history: history.map(({ role, text, minutes_ago }) => ({ role, text, ...(minutes_ago != null && { minutes_ago }) })),
+    },
+  }
 }
 
 export async function startWranglerTarget({ worker, env, logDir, bootTimeoutMs = 90_000 }) {
@@ -53,8 +73,6 @@ export async function startWranglerTarget({ worker, env, logDir, bootTimeoutMs =
   return {
     url,
     async seed(fixture) {
-      // eval-seed.mjs has no conversation section yet; failing beats grading without the history.
-      if (fixture.history) throw new Error('fixtures.history is not supported by the eval worker seed (eval-seed.mjs) yet')
       const file = join(state, 'fixture.json')
       writeFileSync(file, JSON.stringify(fixture))
       await run(process.execPath, ['scripts/eval-seed.mjs', file, '--persist-to', state, '--url', url], { cwd })
