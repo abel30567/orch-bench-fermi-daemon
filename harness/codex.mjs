@@ -137,6 +137,8 @@ function spawnCodex(args, o) {
   }
   child.on('error', cleanup) // a spawn failure (missing bin, bad cwd)
   child.on('close', cleanup)
+  // codex may exit before reading its stdin: a write then fails with EPIPE ('close' still follows).
+  for (const s of [child.stdin, child.stdout, child.stderr]) s.on('error', () => {})
   return child
 }
 
@@ -413,7 +415,21 @@ export function runOnce(o) {
   norm.start()
   setImmediate(() => events.emit('event', { type: 'init', harness: name, version: null, model: o.model ?? null, tools: CODEX_BUILTINS }))
   pipe(child, events, (j) => norm.normalize(j).forEach((ev) => events.emit('event', ev)))
-  const done = new Promise((resolve) => child.on('close', (code) => resolve({ code, outcome, events: all, stderr })))
+  const since = Date.now()
+  let killed = false
+  // 'close': stdout and stderr are drained, so a real turn_end and all of stderr came first.
+  // A codex that ends without one (an early exit, a failed spawn) crashed; one we kill did not.
+  const done = new Promise((resolve) =>
+    child.on('close', (code, signal) => {
+      if (!outcome && !killed)
+        events.emit('event', { type: 'turn_end', ok: false, kind: 'crash', detail: `codex exited (${code ?? signal}) without ending its turn`, durationMs: Date.now() - since, raw: null })
+      resolve({ code, outcome, events: all, stderr })
+    }),
+  )
   child.stdin.end(o.prompt ?? '')
-  return { pid: child.pid, events, done, close: (signal) => child.kill(signal) }
+  const close = (signal) => {
+    killed = true
+    child.kill(signal)
+  }
+  return { pid: child.pid, events, done, close }
 }

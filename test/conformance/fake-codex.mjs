@@ -17,6 +17,7 @@
 //     unset) and this process's argv to $FAKE_DIR/cred.json, run a shell child
 //     (inheriting the environment) that dumps its environment to
 //     $FAKE_DIR/child-env.json, and stream that commandExecution item.
+// With env FAKE_EXIT_EARLY=N it exits N in either mode before reading stdin.
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { readFileSync, writeFileSync } from 'node:fs'
@@ -36,7 +37,7 @@ async function replay(name, turnId, emit, cancelled = () => false) {
     if (cancelled()) return
     const d = JSON.parse(line)
     if (d.$fake === 'sleep') await sleep(d.ms)
-    else if (d.$fake === 'hang') await new Promise(() => {})
+    else if (d.$fake === 'hang') await new Promise(() => setInterval(() => {}, 1 << 30)) // a timer keeps the process alive
     else if (d.$fake === 'exit') process.exit(d.code)
     else if (d.$fake === 'tool_env') toolEnv().forEach((n) => emit(ids(n, turnId)))
     else emit(ids(d, turnId))
@@ -122,7 +123,11 @@ async function exec() {
   process.exit(failed ? 1 : 0)
 }
 
-if (process.argv[2] === 'app-server') appServer()
+if (process.env.FAKE_EXIT_EARLY) {
+  // Exit before reading stdin, as codex does on a bad config: the adapter's prompt write then hits EPIPE.
+  process.stderr.write(`fake codex: exiting early (CODEX_HOME=${process.env.CODEX_HOME ?? ''})\n`)
+  process.exit(Number(process.env.FAKE_EXIT_EARLY))
+} else if (process.argv[2] === 'app-server') appServer()
 else if (process.argv[2] === 'exec') exec()
 else {
   process.stderr.write(`fake codex: unsupported argv ${process.argv.slice(2).join(' ')}\n`)
