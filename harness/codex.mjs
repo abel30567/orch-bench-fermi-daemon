@@ -5,6 +5,9 @@
 //   runOnce       `codex exec --json -`: one prompt on stdin, JSONL events out.
 // Both report the same thread items (app-server in camelCase, exec in snake_case),
 // mapped to the normalized stream by toolCall/toolResult below.
+// A codex that exits (or never spawns) with a turn in flight ends it as
+// turn_end { ok: false, kind: 'crash' } once its output is drained (not when the
+// caller killed it); stream errors (EPIPE on a write after codex died) are ignored.
 //
 // Options beyond the contract:
 //   bin        default env CODEX_BIN, else `codex` on PATH
@@ -137,6 +140,8 @@ function spawnCodex(args, o) {
   }
   child.on('error', cleanup) // a spawn failure (missing bin, bad cwd)
   child.on('close', cleanup)
+  // codex may exit before reading its input: a write to its stdin then fails with EPIPE.
+  for (const s of [child.stdin, child.stdout, child.stderr]) s.on('error', () => {})
   return child
 }
 
@@ -276,8 +281,10 @@ export function startSession(o) {
   const events = new EventEmitter()
   const emit = (ev) => events.emit('event', ev)
   const items = itemTracker()
+  let closed = false
+  let killed = false // a codex we kill (a timeout, the session's end) did not crash
   const write = (msg) => {
-    if (!child.stdin.writable) return false
+    if (closed || !child.stdin.writable) return false
     child.stdin.write(JSON.stringify(msg) + '\n')
     return true
   }
@@ -327,8 +334,12 @@ export function startSession(o) {
   }
   const interruptTurn = () => request('turn/interrupt', { threadId, turnId: turn.id }).catch(() => {})
 
-  // The process is gone: fail whatever still waits on an answer (initialize, turn/start).
-  child.on('close', () => {
+  // The process is gone ('close': its output and stderr are drained): a turn in flight
+  // crashed, and whatever still waits on an answer (initialize, turn/start) fails.
+  child.on('close', (code, signal) => {
+    closed = true
+    if (turn && !killed) endTurn({ ok: false, kind: 'crash', detail: `codex exited (${code ?? signal}) mid-turn` }, null)
+    turn = null
     for (const p of pending.values()) p.reject(new Error('codex app-server exited'))
     pending.clear()
   })
@@ -370,10 +381,10 @@ export function startSession(o) {
     pid: child.pid,
     events,
     get alive() {
-      return child.stdin.writable
+      return !closed && child.stdin.writable
     },
     send(text) {
-      if (!child.stdin.writable) return false
+      if (closed || !child.stdin.writable) return false
       const t = (turn = { id: null, since: Date.now(), last: '', interrupt: false })
       usageAtStart = usage
       ready
@@ -393,6 +404,7 @@ export function startSession(o) {
       return true
     },
     close(signal) {
+      killed = true
       child.kill(signal)
     },
   }
@@ -411,9 +423,22 @@ export function runOnce(o) {
   })
   events.on('stderr', (s) => (stderr += s))
   norm.start()
+  const since = Date.now()
   setImmediate(() => events.emit('event', { type: 'init', harness: name, version: null, model: o.model ?? null, tools: CODEX_BUILTINS }))
   pipe(child, events, (j) => norm.normalize(j).forEach((ev) => events.emit('event', ev)))
-  const done = new Promise((resolve) => child.on('close', (code) => resolve({ code, outcome, events: all, stderr })))
+  let killed = false // a codex the caller kills did not crash
+  // 'close': stdout and stderr are drained, so a real turn_end and all of stderr came first.
+  const done = new Promise((resolve) =>
+    child.on('close', (code, signal) => {
+      if (!outcome && !killed)
+        events.emit('event', { type: 'turn_end', ok: false, kind: 'crash', detail: `codex exited (${code ?? signal})`, durationMs: Date.now() - since, raw: null })
+      resolve({ code, outcome, events: all, stderr })
+    }),
+  )
   child.stdin.end(o.prompt ?? '')
-  return { pid: child.pid, events, done, close: (signal) => child.kill(signal) }
+  const close = (signal) => {
+    killed = true
+    child.kill(signal)
+  }
+  return { pid: child.pid, events, done, close }
 }

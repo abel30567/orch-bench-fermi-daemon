@@ -77,6 +77,8 @@ function spawnHarness(args, o) {
   const bin = o.bin || process.env.CLAUDE_BIN || join(process.env.HOME, '.local/bin/claude')
   const [cmd, argv] = o.sandbox ? o.sandbox.wrap(bin, args) : [bin, args]
   const child = spawn(cmd, argv, { cwd: o.cwd, env, stdio })
+  // claude may exit before reading its input: a write to its stdin then fails with EPIPE.
+  for (const s of [child.stdin, child.stdout, child.stderr]) s.on('error', () => {})
   if (o.tokenPipe != null && child.stdio[3]) {
     child.stdio[3].on('error', () => {}) // the child may exit before reading it
     child.stdio[3].end(o.tokenPipe + '\n')
