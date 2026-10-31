@@ -7,9 +7,13 @@
 //
 // turn: drain | stop | teams | keepalive (texts below). interruptAfter: call the
 // session's interrupt() as soon as the turn calls that tool, as the control
-// endpoint's POST /abort does. That turn's turn_end is marked `interrupted: true`
-// so the runner does not count it as a harness failure.
+// endpoint's POST /abort does. It can also be { claim: true, ms: 30000 }: on the
+// first Fermi call after a task_claim that returned a task, or after ms from the
+// start of the turn, whichever comes first (either key alone works), for a stop that
+// must not depend on what the model chooses to do. That turn's turn_end is marked
+// `interrupted: true` so the runner does not count it as a harness failure.
 import { EventEmitter } from 'node:events'
+import { isFermiCall } from './assertions.mjs'
 
 // The turn texts warm-worker.mjs sends (test/evals-control.test.mjs keeps them in sync).
 export const TURNS = {
@@ -32,8 +36,17 @@ const died = (detail) => ({ type: 'turn_end', ok: false, kind: 'unknown_error', 
 
 // One turn: send `text`, forward its events, interrupt on `interruptAfter`; resolves with its turn_end.
 function runTurn(session, text, interruptAfter, emit) {
+  const { tool, claim, ms } = typeof interruptAfter === 'string' ? { tool: interruptAfter } : (interruptAfter ?? {})
   return new Promise((resolve) => {
     let interrupted = false
+    const interrupt = () => {
+      if (interrupted) return
+      interrupted = true
+      session.interrupt()
+    }
+    const timer = ms != null ? setTimeout(interrupt, ms) : null
+    const claims = new Set() // ids of the turn's task_claim calls
+    let claimed = false
     const onEvent = (ev) => {
       if (ev.type === 'turn_end') {
         off()
@@ -42,10 +55,11 @@ function runTurn(session, text, interruptAfter, emit) {
         return resolve(end)
       }
       emit(ev)
-      if (interruptAfter && !interrupted && ev.type === 'tool_call' && ev.name === interruptAfter) {
-        interrupted = true
-        session.interrupt()
+      if (ev.type === 'tool_call') {
+        if (ev.name === tool || (claim && claimed && isFermiCall(ev))) interrupt()
+        if (ev.name === 'task_claim') claims.add(ev.id)
       }
+      if (ev.type === 'tool_result' && claims.has(ev.id) && ev.ok && !/"tasks"\s*:\s*\[\s*\]/.test(String(ev.content))) claimed = true
     }
     const onExit = (code) => {
       off()
@@ -54,6 +68,7 @@ function runTurn(session, text, interruptAfter, emit) {
       resolve(end)
     }
     const off = () => {
+      clearTimeout(timer)
       session.events.off('event', onEvent)
       session.events.off('exit', onExit)
     }
