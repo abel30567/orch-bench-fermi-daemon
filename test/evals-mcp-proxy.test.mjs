@@ -2,8 +2,14 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import http from 'node:http'
+import { mkdtempSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { startMcpProxy } from '../evals/lib/mcp-proxy.mjs'
-import { serve } from '../evals/lib/net.mjs'
+import { readBody, serve } from '../evals/lib/net.mjs'
+import { startFakeTarget } from '../evals/lib/fake-target.mjs'
+import { runAttempt } from '../evals/lib/runner.mjs'
+import * as fake from '../evals/harness/fake.mjs'
 
 // An upstream whose GET /mcp opens an SSE stream, sends one event and then
 // (if `cut`) drops the socket mid-stream, as a shutting-down eval worker does.
@@ -91,4 +97,72 @@ test('a throwing onNote never escapes', { timeout: 5000 }, async () => {
     await proxy.close()
     await up.close()
   }
+})
+
+// The fake target behind a front that answers GET /mcp with an SSE stream it
+// cuts mid-stream; everything else is forwarded unchanged.
+async function sseCuttingTarget({ env }) {
+  const real = await startFakeTarget({ env })
+  const front = await serve(async (req, res) => {
+    if (req.method === 'GET' && req.url === '/mcp') {
+      res.writeHead(200, { 'content-type': 'text/event-stream' })
+      res.write('event: message\ndata: {}\n\n')
+      return setTimeout(() => res.socket.destroy(), 50)
+    }
+    const body = req.method === 'POST' ? await readBody(req) : undefined
+    const headers = { ...req.headers }
+    delete headers.host
+    delete headers['content-length']
+    const up = await fetch(real.url + req.url, { method: req.method, headers, body })
+    const out = {}
+    up.headers.forEach((v, k) => !['content-length', 'transfer-encoding', 'content-encoding', 'connection'].includes(k) && (out[k] = v))
+    res.writeHead(up.status, out)
+    res.end(Buffer.from(await up.arrayBuffer()))
+  })
+  return {
+    ...real,
+    url: front.url,
+    close: async () => {
+      await front.close()
+      await real.close()
+    },
+  }
+}
+
+test('runAttempt records a cut upstream SSE stream as one mcp-proxy note in trace.jsonl', { timeout: 15000 }, async () => {
+  // The fake harness, but it first opens the SSE GET /mcp through the proxy and waits for it to be cut.
+  const harness = {
+    runOnce: (opts) => {
+      const run = fake.runOnce(opts)
+      const { url } = JSON.parse(readFileSync(opts.mcpConfig, 'utf8')).mcpServers.fermi
+      // After the client side ends, give the proxy's pipeline callback a moment to record its note.
+      const noted = () => /"source":"mcp-proxy"/.test((() => { try { return readFileSync(join(opts.cwd, 'trace.jsonl'), 'utf8') } catch { return '' } })())
+      const sse = openSse(url.replace(/\/mcp$/, ''))
+        .then(({ ended }) => ended)
+        .then(async () => {
+          for (let i = 0; i < 100 && !noted(); i++) await new Promise((r) => setTimeout(r, 10))
+        })
+      return { ...run, done: Promise.all([run.done, sse]).then(([r]) => r) }
+    },
+  }
+  const outDir = mkdtempSync(join(tmpdir(), 'pr59-'))
+  const scenario = {
+    name: 'sse-cut',
+    fixtures: { bindings: [{ channel: 'sl', sender_id: 'U0EVALOWNER' }] },
+    inbound: { channel: 'sl', sender: 'U0EVALOWNER', chat: 'D0EVAL', text: 'hi' },
+    expect: [{ called: 'channel_send' }],
+    fake: {
+      script: [
+        { tool: 'task_claim', args: { limit: 1, stale_minutes: 25 } },
+        { tool: 'channel_send', args: { channel: '${task.channel}', chat_id: '${task.chat_id}', text: 'ok' } },
+        { tool: 'task_complete', args: { id: '${task.id}', status: 'done', result: 'r' } },
+      ],
+    },
+  }
+  const r = await runAttempt({ scenario, attempt: 1, harness, timeoutMs: 10_000, outDir, startTarget: sseCuttingTarget })
+  const trace = readFileSync(join(outDir, 'sse-cut', '1', 'trace.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l))
+  const notes = trace.filter((e) => e.type === 'note' && e.source === 'mcp-proxy')
+  assert.equal(notes.length, 1, JSON.stringify(trace))
+  assert.match(notes[0].detail, /terminated|other side closed/)
+  assert.equal(r.pass, true, JSON.stringify(r.failed))
 })

@@ -51,7 +51,8 @@ async function seedSecrets(url, secrets = []) {
 
 const urlEntries = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => /^[a-z]+:\/\//i.test(String(v))))
 
-export async function runAttempt({ scenario, attempt, harness, model, worker, timeoutMs, outDir }) {
+// `startTarget` swaps the in-process fake target (tests only); `worker` still wins.
+export async function runAttempt({ scenario, attempt, harness, model, worker, timeoutMs, outDir, startTarget = startFakeTarget }) {
   const dir = join(outDir, scenario.name, String(attempt))
   mkdirSync(dir, { recursive: true })
   const closers = []
@@ -64,7 +65,7 @@ export async function runAttempt({ scenario, attempt, harness, model, worker, ti
     closers.push(fakes.close)
     const env = { ...fakes.env, ...EVAL_SECRETS }
     assertLocalUrls(urlEntries(env))
-    const target = worker ? await startWranglerTarget({ worker, env, logDir: dir }) : await startFakeTarget({ env })
+    const target = worker ? await startWranglerTarget({ worker, env, logDir: dir }) : await startTarget({ env })
     closers.push(target.close)
     assertLocalUrls({ target: target.url })
     await target.seed(seedFixture(scenario.fixtures, scenario.inbound))
