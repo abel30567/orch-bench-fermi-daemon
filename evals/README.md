@@ -56,6 +56,10 @@ error or a non-localhost URL. `--out` defaults to `runs/evals-<timestamp>`.
 Per attempt, `<out>/<scenario>/<n>/` holds `trace.jsonl` (normalized events),
 `raw.log` (native harness output), `state.json`, `mcp.json` and, with
 `--worker`, `wrangler.log`. These hold transcripts, so never publish them.
+Besides the harness's events, `trace.jsonl` can hold non-fatal notes: an MCP
+stream cut by either side (the harness's SSE `GET /mcp` when it or the target
+shuts down) is one `{ "type": "note", "source": "mcp-proxy", "detail": "<error>" }`.
+Notes never affect grading.
 `<out>/results.json` (schema: `schema/results.schema.json`) has one entry per
 attempt. `<out>/summary.json` has the totals and the pass rate per scenario.
 
