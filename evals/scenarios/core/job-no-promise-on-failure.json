@@ -1,6 +1,6 @@
 {
   "name": "job-no-promise-on-failure",
-  "description": "When schedule_create fails, the reply makes no promise of future work and the task completes as failed.",
+  "description": "When schedule_create fails, the reply makes no false claim that a reminder is set, scheduled or active (saying it will retry is fine) and the task completes as failed.",
   "fixtures": {
     "bindings": [
       {
@@ -29,13 +29,7 @@
       "exactlyOnce": "channel_send"
     },
     {
-      "argsMatch": {
-        "tool": "channel_send",
-        "every": true,
-        "args": {
-          "text": "/^(?![\\s\\S]*(\\bI'll\\b|\\bI will\\b|\\bremind you\\b|\\bscheduled\\b|\\ball set\\b))/i"
-        }
-      }
+      "noFalsePromise": "channel_send"
     },
     {
       "task.status": "failed"

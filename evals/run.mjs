@@ -8,9 +8,10 @@
 // Scenarios with `"schedule": "weekly"` (the soak) are skipped unless --weekly is given.
 // Exit 0 when every attempt's outcome is the expected one, 1 otherwise, 2 on a
 // usage error or a non-localhost URL.
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { loadHarness } from '../harness/index.mjs'
+import { internalToolCalls } from './lib/assertions.mjs'
 import { assertLocalUrls } from './lib/net.mjs'
 import { runAttempt, summarize } from './lib/runner.mjs'
 import { expandScenarios, expandVariants, loadScenario } from './lib/scenario.mjs'
@@ -48,6 +49,9 @@ function parseArgs(argv) {
   if (o.fakeScript && o.harness !== 'fake') throw new Error('--fake-script needs --harness fake')
   return o
 }
+
+// An attempt's normalized trace (none if the runner failed before the harness ran).
+const readTrace = (file) => (existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [])
 
 // --fake-script <key>: play `fake.<key>` (a scripted misbehaviour, e.g. "negative")
 // instead of `fake.script`; every such attempt is expected to fail its assertions.
@@ -102,6 +106,8 @@ async function main() {
   for (const scenario of scenarios)
     for (let attempt = 1; attempt <= opts.k; attempt++) {
       const r = await runAttempt({ scenario, attempt, harness, model: opts.model, worker: opts.worker, timeoutMs: opts.timeoutMs, outDir: out })
+      // The harness's own tool calls (ToolSearch, …), which maxToolCalls does not count, so their cost stays visible.
+      r.internalToolCalls = internalToolCalls(readTrace(join(out, scenario.name, String(attempt), 'trace.jsonl')))
       results.push(r)
       const tag = r.pass ? 'PASS' : r.expectedOutcome === 'fail' ? 'FAIL (expected)' : 'FAIL'
       console.log(`${tag} ${r.scenario} #${attempt} ${r.latencyMs}ms ${r.failed.map((f) => f.message).join(' | ')}`.trimEnd())
