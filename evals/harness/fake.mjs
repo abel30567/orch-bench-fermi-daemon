@@ -7,6 +7,9 @@
 //   { text }            emit assistant text
 //   { shell, result? }  a call to the harness's own shell tool (`Bash`); nothing
 //                       runs, the tool result is `result` (default "")
+//   { builtin, args?, result? }
+//                       a call to another of the harness's own tools (e.g. Claude
+//                       Code's `ToolSearch`); nothing runs, the result is `result`
 //   { sleepMs }         think for that long (a number, or a string such as "${turn}")
 //   { apiError: { status?, text } }
 //                       the model API fails mid-turn: the turn ends here with
@@ -70,6 +73,11 @@ async function play(steps, { mcp, ctx, emit, stopped }) {
     const id = `fake_${++ctx.n}`
     if (step.shell != null) {
       emit({ type: 'tool_call', id, name: 'Bash', rawName: 'Bash', input: { command: fill(step.shell, ctx) } })
+      emit({ type: 'tool_result', id, ok: true, content: String(step.result ?? '') })
+      continue
+    }
+    if (step.builtin != null) {
+      emit({ type: 'tool_call', id, name: step.builtin, rawName: step.builtin, input: fill(step.args ?? {}, ctx) })
       emit({ type: 'tool_result', id, ok: true, content: String(step.result ?? '') })
       continue
     }
