@@ -8,8 +8,20 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { freePort, sleep } from './net.mjs'
+import { seedFixture as baseFixture } from './scenario.mjs'
 
 const run = promisify(execFile)
+
+// The eval-seed fixture for the real worker. MCP-24 seeds `fixtures.history`
+// ({ role, text, minutes_ago? }) through the conversation store as the inbound
+// chat's transcript, so it goes in as `conversation` (`sender` is the group
+// sender for a group chat), not as the fake target's flat `history` rows.
+export function seedFixture(fixtures = {}, inbound = null) {
+  const { history: _rows, ...fixture } = baseFixture(fixtures, inbound)
+  const history = (fixtures.history ?? []).map(({ role, text, minutes_ago }) => ({ role, text, ...(minutes_ago != null && { minutes_ago }) }))
+  if (!history.length) return fixture
+  return { ...fixture, conversation: { channel: inbound?.channel, chat_id: inbound?.chat, sender: inbound?.sender, history } }
+}
 
 export function workerDir(checkout) {
   for (const d of [join(checkout, 'packages/worker'), checkout])
@@ -53,8 +65,6 @@ export async function startWranglerTarget({ worker, env, logDir, bootTimeoutMs =
   return {
     url,
     async seed(fixture) {
-      // eval-seed.mjs has no conversation section yet; failing beats grading without the history.
-      if (fixture.history) throw new Error('fixtures.history is not supported by the eval worker seed (eval-seed.mjs) yet')
       const file = join(state, 'fixture.json')
       writeFileSync(file, JSON.stringify(fixture))
       await run(process.execPath, ['scripts/eval-seed.mjs', file, '--persist-to', state, '--url', url], { cwd })
