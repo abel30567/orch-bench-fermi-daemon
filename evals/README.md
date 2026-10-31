@@ -66,6 +66,8 @@ only the localhost eval server, refuses to start on any other URL, and copies th
 real `~/.pi/agent/auth.json` in for the attempt, because pi can only log in from
 that file. pi's tools can read that copy (the known credential-isolation blocker).
 It is deleted when the attempt ends, and refreshed tokens are not copied back.
+SIGKILL cannot be caught: a runner killed that way leaves the copy in its
+`$TMPDIR/eval-pi-home-*` directory until you remove it.
 
 ## Scenario format (JSON)
 

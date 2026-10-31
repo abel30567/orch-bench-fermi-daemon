@@ -15,7 +15,8 @@
 //     translated by piMcpConfig (localhost only, or nothing starts) and, for
 //     the attempt only, a copy of the real ~/.pi/agent/auth.json, pi's only
 //     login (see the credential blocker below). The copy is deleted when pi
-//     exits or this process does; refreshed tokens are not copied back.
+//     exits or this process does, except on SIGKILL, which nothing can catch;
+//     refreshed tokens are not copied back.
 // allowedTools is ignored and runOnce's skipPermissions/maxTurns have no pi
 // equivalent. tokenFd, configDir and scrubSubprocessEnv are refused, and so is
 // mcpConfig without sandboxHome (they promise an isolation pi cannot give; see
@@ -45,7 +46,7 @@
 
 import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { isLocalUrl } from '../lib/local-url.mjs'
@@ -56,13 +57,13 @@ export const name = 'pi'
 
 const UNSUPPORTED = ['tokenFd', 'configDir', 'scrubSubprocessEnv']
 const AGENT_DIR = join('.pi', 'agent')
-const EXIT_SIGNALS = ['SIGINT', 'SIGTERM']
+const EXIT_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT', 'SIGABRT']
 
 // The runner's MCP config → pi's mcp.json. Only each server's url survives, so
 // nothing else (a header, a stdio command) can carry a way off this machine.
 export function piMcpConfig(config) {
   const servers = Object.entries(config?.mcpServers ?? {}).map(([server, s]) => {
-    if (!isLocalUrl(s?.url)) throw new Error(`refusing to start: non-localhost MCP server ${server}=${s?.url ?? '(no url)'}`)
+    if (typeof s?.url !== 'string' || !isLocalUrl(s.url)) throw new Error(`refusing to start: non-localhost MCP server ${server}=${s?.url ?? '(no url)'}`)
     return [server, { url: s.url }]
   })
   return { mcpServers: Object.fromEntries(servers) }
@@ -70,7 +71,12 @@ export function piMcpConfig(config) {
 
 const readMcpConfig = (c) => (typeof c !== 'string' ? c : JSON.parse(c.trim().startsWith('{') ? c : readFileSync(c, 'utf8')))
 
-const real = (p) => (existsSync(p) ? realpathSync(p) : resolve(p))
+// By inode, not by path: a path that differs only in case is the same directory on
+// a case-insensitive volume, and realpath keeps the case it was given.
+function sameDir(a, b) {
+  const [x, y] = [a, b].map((p) => statSync(p, { bigint: true, throwIfNoEntry: false }))
+  return x && y ? x.dev === y.dev && x.ino === y.ino : resolve(a) === resolve(b)
+}
 
 // Eval mode: prepare <sandboxHome>/.pi/agent. Returns the env overrides for pi and
 // removeAuth(), or null outside eval mode. Throws before writing anything if the
@@ -83,9 +89,11 @@ function prepareSandbox({ mcpConfig, sandboxHome }) {
   const home = resolve(sandboxHome)
   const agentDir = join(home, AGENT_DIR)
   const realAgentDir = join(homedir(), AGENT_DIR)
-  mkdirSync(agentDir, { recursive: true, mode: 0o700 })
   // Writing here would replace the owner's mcp.json, and the cleanup would delete their login.
-  if (real(agentDir) === real(realAgentDir)) throw new Error('pi adapter: sandboxHome is the real HOME (see harness/pi.mjs)')
+  // Every level, because the agent dir may not exist yet and a symlinked .pi leads to the same place.
+  if (['', '.pi', AGENT_DIR].some((sub) => sameDir(join(home, sub), join(homedir(), sub))))
+    throw new Error('pi adapter: sandboxHome is the real HOME (see harness/pi.mjs)')
+  mkdirSync(agentDir, { recursive: true, mode: 0o700 })
   writeFileSync(join(agentDir, 'mcp.json'), JSON.stringify(config, null, 2) + '\n')
   const auth = join(agentDir, 'auth.json')
   const removeAuth = () => rmSync(auth, { force: true })

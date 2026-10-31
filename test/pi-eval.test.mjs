@@ -150,7 +150,7 @@ describe('pi adapter eval mode', () => {
     assert.equal(existsSync(sandboxAuth(o.sandboxHome)), false)
   })
 
-  for (const signal of ['SIGTERM', 'SIGINT'])
+  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP', 'SIGQUIT', 'SIGABRT'])
     test(`auth.json is removed when the runner dies of ${signal} mid-attempt`, async () => {
       const o = attempt()
       const script = join(o.cwd, 'runner.mjs')
@@ -198,6 +198,7 @@ describe('pi adapter eval mode', () => {
     const local = fermi().mcpServers.fermi
     assert.throws(() => piMcpConfig({ mcpServers: { fermi: local, other: { url: PRODUCTION } } }), /refusing to start: non-localhost .*other/)
     assert.throws(() => piMcpConfig({ mcpServers: { tool: { command: 'npx', args: [PRODUCTION] } } }), /refusing to start: non-localhost .*tool/)
+    assert.throws(() => piMcpConfig({ mcpServers: { list: { url: ['http://localhost/'] } } }), /refusing to start: non-localhost .*list/)
   })
 
   test('mcpConfig without sandboxHome and sandboxHome without mcpConfig both refuse', () => {
@@ -211,10 +212,28 @@ describe('pi adapter eval mode', () => {
   test('a sandboxHome that resolves to the real HOME refuses and leaves the real files alone', () => {
     const link = join(tmp(), 'home')
     symlinkSync(process.env.HOME, link)
-    for (const sandboxHome of [process.env.HOME, link]) {
+    const dotPi = join(tmp(), 'home')
+    mkdirSync(dotPi)
+    symlinkSync(join(process.env.HOME, '.pi'), join(dotPi, '.pi'))
+    const homes = [process.env.HOME, link, dotPi]
+    // Only a case-insensitive volume (the macOS default) has this second spelling of HOME.
+    const upper = process.env.HOME.toUpperCase()
+    if (existsSync(upper)) homes.push(upper)
+    for (const sandboxHome of homes) {
       assert.throws(() => runOnce(attempt({ sandboxHome })), /sandboxHome is the real HOME/)
       assert.equal(readFileSync(join(realAgent(), 'auth.json'), 'utf8'), AUTH)
       assert.equal(statSync(join(realAgent(), 'mcp.json')).mode & 0o777, 0)
+    }
+  })
+
+  test('a real HOME that has no pi config yet refuses and stays empty', () => {
+    const before = process.env.HOME
+    process.env.HOME = tmp()
+    try {
+      assert.throws(() => runOnce(attempt({ sandboxHome: process.env.HOME })), /sandboxHome is the real HOME/)
+      assert.deepEqual(readdirSync(process.env.HOME), [])
+    } finally {
+      process.env.HOME = before
     }
   })
 
