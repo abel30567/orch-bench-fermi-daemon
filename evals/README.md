@@ -143,6 +143,18 @@ scenarios carry `"harnesses": ["fake"]` until a sandboxed shell exists (DMN-22).
 A scenario whose `harnesses` excludes `--harness` is skipped, not failed, and
 listed under `skipped` in `summary.json`.
 
+## pi
+
+`--harness pi` never sees the owner's pi config, which points at production
+Fermi. Each attempt gets a throwaway HOME under the system temp dir, removed when
+the attempt ends, and the adapter writes `.pi/agent/mcp.json` there from the
+runner's MCP config. A server without a localhost `url` refuses to start. The
+login is a copy of the real `~/.pi/agent/auth.json`, because pi can log in from
+nowhere else; it is deleted when pi exits. While the attempt runs, pi's own tools
+can read that copy: this is the credential-isolation blocker in `harness/pi.mjs`.
+A runner that is killed mid-attempt cannot clean up, so its
+`fermi-eval-pi-home-*` temp dir, with the copy, stays behind and must be removed.
+
 ## The fake harness
 
 `--harness fake` (`harness/fake.mjs`) runs no model. It plays the scenario's
