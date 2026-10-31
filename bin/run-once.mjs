@@ -75,6 +75,11 @@ run.events.on('raw', (line) => {
   } catch {}
 })
 run.events.on('stderr', (s) => out.write(s))
+let spawnFailed = false
+run.events.on('spawn_error', (e) => {
+  spawnFailed = true
+  note(`spawn error: ${e.message}`)
+})
 
 // poll.sh's reaper SIGTERMs us on its own watchdog; take the harness down with us.
 for (const sig of ['SIGTERM', 'SIGINT']) {
@@ -100,5 +105,5 @@ const { code } = await run.done
 clearTimeout(watchdog)
 clearTimeout(killTimer)
 if (o.session && sessionId && !timedOut) writeFileSync(o.session, sessionId + '\n')
-note(`exit ${timedOut ? 'watchdog' : code}`)
-out.end(() => process.exit(timedOut ? 124 : (code ?? 1)))
+note(`exit ${timedOut ? 'watchdog' : spawnFailed ? 'spawn error' : code}`)
+out.end(() => process.exit(timedOut ? 124 : spawnFailed ? 127 : (code ?? 1)))
