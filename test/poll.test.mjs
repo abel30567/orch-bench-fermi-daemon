@@ -19,12 +19,12 @@ const script = (path, body) => {
   chmodSync(path, 0o755)
   return path
 }
-// Reports `version`, logs every other call, and hands it to the real node.
-const fakeNode = (path, version, calls) =>
-  script(path, `[ "$1" = --version ] && { echo v${version}; exit 0; }\necho "$0 $*" >>"${calls}"\nexec "${process.execPath}" "$@"`)
+// Prints `lines` for --version, logs every other call, and hands it to the real node.
+const printingNode = (path, lines, calls) =>
+  script(path, `[ "$1" = --version ] && { ${lines.map((l) => `echo '${l}';`).join(' ')} exit 0; }\necho "$0 $*" >>"${calls}"\nexec "${process.execPath}" "$@"`)
+const fakeNode = (path, version, calls) => printingNode(path, [`v${version}`], calls)
 // The same, with the line a version-manager shim prints before the version.
-const shimNode = (path, version, calls) =>
-  script(path, `[ "$1" = --version ] && { echo 'Now using node'; echo v${version}; exit 0; }\necho "$0 $*" >>"${calls}"\nexec "${process.execPath}" "$@"`)
+const shimNode = (path, version, calls) => printingNode(path, ['Now using node', `v${version}`], calls)
 
 const until = async (cond, ms = 5000) => {
   for (const t0 = Date.now(); !cond(); ) {
@@ -106,6 +106,18 @@ describe('AC1: a node that is too old or missing is refused loudly, with no spaw
     assertRefused(d, poll(d), errorLine(node, '14.21.3', 'drain.md'))
   })
 
+  test('a good version after a too-old one does not hide it', () => {
+    const d = daemon()
+    const node = printingNode(join(d.bin, 'node'), ['v14.1.0', 'v22.1.0'], d.calls)
+    assertRefused(d, poll(d), errorLine(node, '14.1.0', 'drain.md'))
+  })
+
+  test('output with no version in it is unknown, not quoted back', () => {
+    const d = daemon()
+    const node = printingNode(join(d.bin, 'node'), ['Now using node', 'done'], d.calls)
+    assertRefused(d, poll(d), errorLine(node, 'unknown', 'drain.md'))
+  })
+
   test('nothing to do: no node check and a clean exit', () => {
     const d = daemon({ pending: 0 })
     writeFileSync(join(d.dir, 'last-heartbeat'), '')
@@ -157,6 +169,17 @@ describe('AC2: NODE_BIN is honoured', () => {
   test('a shim preamble before a good version does not refuse a usable node', async () => {
     const d = daemon()
     const node = shimNode(join(d.bin, 'node'), '22.1.0', d.calls)
+    stubRun(d)
+    const r = poll(d)
+    assert.equal(r.status, 0, r.stderr)
+    await until(() => existsSync(d.calls))
+    assert.ok(readFileSync(d.calls, 'utf8').startsWith(`${node} `))
+    assert.doesNotMatch(pollLog(d), /ERROR/)
+  })
+
+  test('text after a good version does not refuse a usable node', async () => {
+    const d = daemon()
+    const node = printingNode(join(d.bin, 'node'), ['v22.1.0', 'done'], d.calls)
     stubRun(d)
     const r = poll(d)
     assert.equal(r.status, 0, r.stderr)

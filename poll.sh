@@ -86,11 +86,16 @@ require_node() {
 	local prompt_file="$1"
 	NODE="${NODE_BIN:-$(command -v node)}"
 	NODE="${NODE:-node}"
-	local version
-	version=$("$NODE" --version 2>/dev/null)
-	# The version is the last line: a version-manager shim may print a preamble.
-	version="${version##*$'\n'}"
-	version="${version#v}"
+	# The version is the first version-shaped line: a version-manager shim may
+	# print text around it. Two such lines resolve to the first, so a too-old
+	# version is never hidden by a later one.
+	local line version=""
+	for line in "${(@f)$("$NODE" --version 2>/dev/null)}"; do
+		if [[ "$line" == v<->.<->.<->* ]]; then
+			version="${line#v}"
+			break
+		fi
+	done
 	local major="${version%%.*}"
 	if [[ "$major" != <22-> ]]; then
 		log "ERROR: node '$NODE' is v${version:-unknown}; bin/run-once.mjs needs node >= 22 (set NODE_BIN in .env) — not spawning $prompt_file"
