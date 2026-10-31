@@ -97,3 +97,24 @@ describe('core pack under the fake harness', () => {
     }
   })
 })
+
+describe('wrangler target seed fixture', async () => {
+  const { seedFixture } = await import('../evals/lib/wrangler-target.mjs')
+  test('history becomes the MCP-24 conversation section for the inbound chat', () => {
+    const inbound = { channel: 'wa', sender: '15551234567', chat: '120363@g.us', text: 'hi' }
+    const f = seedFixture({ memories: [], history: [{ role: 'user', text: 'earlier', minutes_ago: 5 }, { role: 'assistant', text: 'ok' }] }, inbound)
+    assert.equal('history' in f, false)
+    assert.deepEqual(f.conversation, {
+      channel: 'wa',
+      chat_id: '120363@g.us',
+      sender: '15551234567',
+      history: [{ role: 'user', text: 'earlier', minutes_ago: 5 }, { role: 'assistant', text: 'ok' }],
+    })
+    assert.deepEqual(f.memories, [])
+  })
+  test('no history, no conversation section', () => {
+    const f = seedFixture({ memories: [] }, { channel: 'sl', sender: 'U1', chat: 'D1', text: 'x' })
+    assert.equal('conversation' in f, false)
+    assert.equal('history' in f, false)
+  })
+})
