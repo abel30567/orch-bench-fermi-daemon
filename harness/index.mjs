@@ -17,6 +17,8 @@
 //   'raw'    one raw output line, for logs in the harness's native format
 //   'stderr' a stderr chunk (string)
 //   'exit'   the exit code
+//   'error'  claude-code runOnce only: the process could not be spawned (an Error);
+//            `done` still resolves. Callers of that runOnce must listen for it.
 //
 // Normalized events ({ type, ... }):
 //   init        { harness, version, model, tools[] }

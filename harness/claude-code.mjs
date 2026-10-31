@@ -161,6 +161,7 @@ export function runOnce(o) {
   })
   events.on('stderr', (s) => (stderr += s))
   pipeEvents(child, events, () => since)
+  child.on('error', (err) => events.emit('error', err)) // spawn failure (missing bin); 'close' still follows
   const done = new Promise((resolve) => child.on('close', (code) => resolve({ code, outcome, events: all, stderr })))
   child.stdin.end(o.prompt ?? '')
   return { pid: child.pid, events, done, close: (signal) => child.kill(signal) }
