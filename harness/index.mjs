@@ -17,6 +17,8 @@
 //   'raw'    one raw output line, for logs in the harness's native format
 //   'stderr' a stderr chunk (string)
 //   'exit'   the exit code
+//   'error'  runOnce only (claude-code): the harness failed to spawn (an Error);
+//            'close' still follows, so done resolves
 //
 // Normalized events ({ type, ... }):
 //   init        { harness, version, model, tools[] }

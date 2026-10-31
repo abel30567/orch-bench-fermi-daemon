@@ -75,6 +75,8 @@ run.events.on('raw', (line) => {
   } catch {}
 })
 run.events.on('stderr', (s) => out.write(s))
+// A harness that can't spawn (missing bin) would crash us; keep the reason in the run log.
+run.events.on('error', (err) => note(`spawn error: ${err.message}`))
 
 // poll.sh's reaper SIGTERMs us on its own watchdog; take the harness down with us.
 for (const sig of ['SIGTERM', 'SIGINT']) {
