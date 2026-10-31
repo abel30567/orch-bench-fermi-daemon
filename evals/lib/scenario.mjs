@@ -93,27 +93,21 @@ export function expandVariants(s) {
 // entries ({ channel, sender_id, note? }), seeded into the worker's allowlist.
 // An inbound with `via: "task"` (a phone call result, a cloud handoff: nothing a
 // bridge webhook delivers) is seeded as the newest pending task instead.
-// `history` ({ role, text, minutes_ago? }) is the inbound chat's prior transcript.
+// `history` ({ role, text, minutes_ago? }) is the inbound chat's prior transcript,
+// seeded as MCP-24's `conversation` section.
 export function seedFixture(fixtures = {}, inbound = null) {
   const { profile, memories, skills } = fixtures
   const allowlist = [...(fixtures.allowlist ?? []), ...(fixtures.bindings ?? [])]
   const tasks = [...(fixtures.tasks ?? [])]
   if (inbound?.via === 'task') tasks.push({ id: 'eval-inbound', channel: inbound.channel, sender: inbound.sender, chat_id: inbound.chat, payload: inbound.text })
-  const now = Date.now()
-  const history = (fixtures.history ?? []).map((m) => ({
-    channel: inbound?.channel,
-    chat_id: inbound?.chat,
-    role: m.role,
-    text: m.text,
-    created_at: now - (m.minutes_ago ?? 0) * 60_000,
-  }))
+  const history = fixtures.history ?? []
   return {
     ...(profile && { profile }),
     ...(memories && { memories }),
     ...(skills && { skills }),
     ...((fixtures.tasks || tasks.length) && { tasks }),
     ...(allowlist.length && { allowlist }),
-    ...(history.length && { history }),
+    ...(history.length && { conversation: { channel: inbound?.channel, chat_id: inbound?.chat, sender: inbound?.sender, history } }),
   }
 }
 
