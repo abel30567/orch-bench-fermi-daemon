@@ -4,7 +4,9 @@ A **Slack Socket Mode bridge** for Fermi. It holds an `@slack/socket-mode`
 WebSocket and forwards each user message to the Fermi Worker:
 
 - **Inbound** — a Slack message arrives → `POST ${FERMI_URL}/sl/webhook` → the local
-  Fermi daemon (`poll.sh`) is poked so it drains the task promptly.
+  Fermi daemon (`poll.sh`) is poked so it drains the task promptly. The body carries
+  `message_id` (Slack `client_msg_id`, falling back to `ts`) so a retried delivery of
+  the same message is idempotent on the Worker.
 
 This bridge is **receive-only**: it never sends Slack messages. The Worker sends
 all replies itself over `chat.postMessage`, so there is no outbox loop here
