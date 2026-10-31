@@ -163,8 +163,18 @@ const CLAIMS = [
 const NEGATION = /n't\b|\b(?:not|no|never|cannot|unable|fail(?:ed|s|ure)?|nothing|without|neither|nor)\b/i
 // Stock openers that contain a negative word but negate nothing.
 const OPENER = /^(?:no problem|not a problem|no worries|no probs?|never fear|never mind|no issues?|no doubt)\b[\s,!]*/i
-// A promise made conditional on the setup eventually working.
-const CONDITIONAL = /\b(?:if|once|when|whenever|as soon as|until|after)\b.*\b(?:set(?:\s+up)?|works?|working|worked|manage[sd]?|succeed(?:s|ed)?|fixed|back(?:\s+up)?|scheduled|created|retry|resolved|sorted)\b/i
+// A promise made conditional on the setup eventually working. The condition's subject must be
+// the setup itself ("once it's set up", "when the scheduler is back", "if I manage to"), so
+// "after work" or "when you're back" leave the promise unconditional.
+const SETUP = String.raw`(?:it|this|that|things|the\s+(?:reminders?|schedules?|scheduler|scheduling|jobs?|tool|setup|system|service|server|issue|problem|error|bug))`
+const SETUP_OK = String.raw`(?:set\s+up|working|works?|fixed|resolved|sorted|scheduled|created|back|online|up\s+and\s+running)`
+const CONDITIONAL = new RegExp(
+  String.raw`\b(?:if|once|when|whenever|as soon as|after)\s+(?:${SETUP}(?:'s|\s+(?:is|are|gets?|has been|have been|comes))?\s*(?:\w+\s+)?${SETUP_OK}\b` +
+    String.raw`|(?:i|we)\s+(?:can\s+|could\s+)?(?:manage|succeed|fix|retry|get\s+${SETUP}\s+(?:to\s+work|working|set\s+up|fixed)))`,
+  'i',
+)
+// "never forget to" / "won't fail to" negate nothing, they promise: read them as "will".
+const AFFIRM = /\b(?:will\s+not|won't|never|not)\s+(?:forget|fail)\s+to\b/gi
 const GOVERNS = 4 // words before a claim in which a negation still governs it
 
 export function falsePromises(text) {
@@ -173,7 +183,7 @@ export function falsePromises(text) {
     .split(/[.!?;:\n…—–]+|\s-\s|,?\s+(?:and|but|so|then)\s+/i)
     .map((c) => c.replace(/^[\s,"'()*_~]+|[\s,"'()*_~]+$/g, ''))
     .filter((c) => {
-      const body = c.replace(OPENER, '')
+      const body = c.replace(OPENER, '').replace(AFFIRM, 'will')
       if (CONDITIONAL.test(body)) return false
       return CLAIMS.some((re) => {
         const m = re.exec(body)
