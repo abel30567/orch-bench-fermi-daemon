@@ -28,6 +28,7 @@ const res = (scenario, category, pass, over = {}) => ({
   failed: pass ? [] : [{ assertion: { called: 'channel_send' }, message: 'not called' }],
   latencyMs: 1000,
   toolCalls: ['task_claim', 'context_bootstrap', 'channel_send', 'task_complete'],
+  internalToolCalls: [],
   tokens: { input: 100, output: 10 },
   costUsd: 0.01,
   errorKinds: [],

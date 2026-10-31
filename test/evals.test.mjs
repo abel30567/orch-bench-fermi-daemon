@@ -272,7 +272,7 @@ describe('driver: faults, fakes and state', () => {
 })
 
 describe('assertions', () => {
-  const call = (name, input = {}) => ({ type: 'tool_call', name, input })
+  const call = (name, input = {}) => ({ type: 'tool_call', name, rawName: `mcp__fermi__${name}`, input })
   const trace = [call('task_claim', { limit: 1 }), call('context_bootstrap'), call('channel_send', { chat_id: 'D1', text: 'Call +15555550100?' }), call('task_complete', { id: 't1' }), { type: 'text', text: 'done' }]
   const state = {
     tasks: [
