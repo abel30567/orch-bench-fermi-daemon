@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "fermi-daemon/evals/results.schema.json",
+  "title": "Eval run results",
+  "description": "evals/run.mjs writes one entry per scenario attempt to <out>/results.json.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["scenario", "attempt", "pass", "status", "infraRetries", "expectedOutcome", "failed", "latencyMs", "toolCalls", "tokens", "costUsd", "errorKinds"],
+    "properties": {
+      "scenario": { "type": "string", "minLength": 1 },
+      "category": { "type": "string", "minLength": 1 },
+      "attempt": { "type": "integer", "minimum": 1 },
+      "authMode": { "enum": ["none", "fd", "keychain", "proxy"] },
+      "pass": { "type": ["boolean", "null"], "description": "null when status is invalid or setup_error: the attempt was never graded" },
+      "status": { "enum": ["valid", "invalid", "setup_error"], "description": "invalid: still rate/spend-limited or 5xx after every infra retry; setup_error: a seeded fixture section did not land on the eval target" },
+      "invalidReason": { "type": "string" },
+      "infraRetries": { "type": "integer", "minimum": 0, "description": "times the attempt was re-run after an infrastructure outcome" },
+      "expectedOutcome": { "enum": ["pass", "fail"] },
+      "failed": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["assertion", "message"],
+          "properties": {
+            "assertion": { "type": ["object", "null"] },
+            "message": { "type": "string" }
+          }
+        }
+      },
+      "latencyMs": { "type": "integer", "minimum": 0 },
+      "toolCalls": { "type": "array", "items": { "type": "string" } },
+      "effectiveToolCalls": { "type": "array", "items": { "type": "string" }, "description": "toolCalls without the calls a guardrail stopped: result {\"status\":\"pending_approval\"|\"denied\"} or {\"error\":\"plan_mode_restricted\"}" },
+      "internalToolCalls": { "type": "array", "items": { "type": "string" } },
+      "regradedAt": { "type": "string", "minLength": 1, "description": "regraded.json only (judge.mjs --regrade): when the entry was graded again" },
+      "assertionsVersion": { "type": "string", "minLength": 1, "description": "regraded.json only: hash of the grading code and the scenario's expect it was graded with" },
+      "tokens": {
+        "type": ["object", "null"],
+        "additionalProperties": false,
+        "required": ["input", "output"],
+        "properties": {
+          "input": { "type": ["integer", "null"], "minimum": 0 },
+          "output": { "type": ["integer", "null"], "minimum": 0 }
+        }
+      },
+      "costUsd": { "type": ["number", "null"], "minimum": 0 },
+      "errorKinds": { "type": "array", "items": { "type": "string" } },
+      "builtinTools": { "type": ["array", "null"], "items": { "type": "string" } },
+      "surfaceDelta": {
+        "type": ["object", "null"],
+        "additionalProperties": false,
+        "required": ["added", "removed"],
+        "properties": {
+          "added": { "type": "array", "items": { "type": "string" } },
+          "removed": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "semantic": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["question", "tool", "expect", "regex", "judge", "answers"],
+          "properties": {
+            "question": { "type": "string", "minLength": 1 },
+            "tool": { "type": "string", "minLength": 1 },
+            "expect": { "enum": ["yes", "no"] },
+            "regex": { "enum": ["pass", "fail", null] },
+            "regexMessage": { "type": "string" },
+            "judge": { "enum": ["pass", "fail", "error", "disabled"] },
+            "answers": { "type": "array", "items": { "enum": ["yes", "no"] } },
+            "error": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}
