@@ -24,10 +24,30 @@ MAX_TURNS="${MAX_TURNS:-50}"
 MODEL="${MODEL:-claude-opus-4-6[1m]}"        # model for daemon claude -p runs (1M-context Opus 4.6)
 # Allowed tools and setting sources match the warm worker (lib/run-policy.mjs).
 LANE_DIR="$DAEMON_HOME/lanes"
-mkdir -p "$LANE_DIR"
+mkdir -p "$LANE_DIR" logs runs
 rm -f "$DAEMON_HOME/run.lock" 2>/dev/null # legacy single-lock cleanup
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >>logs/poll.log }
+
+# The cold path is the fallback for when the warm worker is down, so it must
+# never fail silently: resolve node ($NODE_BIN from .env, else PATH) and refuse
+# to spawn — loudly — if it is missing or older than run-once.mjs needs.
+NODE_MIN_MAJOR=22
+NODE="${NODE_BIN:-$(command -v node 2>/dev/null)}"
+check_node() {
+	local prompt_file="$1" version major
+	version=$("$NODE" --version 2>/dev/null)
+	version="${version#v}"
+	major="${version%%.*}"
+	if [[ -z "$version" ]]; then
+		log "ERROR: node '$NODE' not found or not runnable; bin/run-once.mjs needs node >= $NODE_MIN_MAJOR (set NODE_BIN in .env) — not spawning $prompt_file"
+		return 1
+	fi
+	if [[ "$major" != <-> ]] || (( major < NODE_MIN_MAJOR )); then
+		log "ERROR: node '$NODE' is v$version; bin/run-once.mjs needs node >= $NODE_MIN_MAJOR (set NODE_BIN in .env) — not spawning $prompt_file"
+		return 1
+	fi
+}
 
 now=$(date +%s)
 
@@ -79,13 +99,14 @@ acquire_lane() {
 	return 1
 }
 
-# Detached nohup spawn from the clean dir (EINTR-safe) of bin/run-once.mjs,
+# Detached nohup spawn (stdout/stderr appended to the run's log) from the clean dir (EINTR-safe) of bin/run-once.mjs,
 # which runs the harness, enforces the MAX_RUN_SECONDS watchdog and removes the
 # lane on exit. Only heartbeat runs pass --session (resume from and store
 # session.id): concurrent drain runs must not race on it.
 spawn_run() {
 	local prompt_file="$1"
 	shift
+	check_node "$prompt_file" || exit 1
 	local lane
 	lane=$(acquire_lane) || { log "all $MAX_CONCURRENT lanes busy — deferring $prompt_file"; return 1; }
 	local ts
@@ -95,14 +116,14 @@ spawn_run() {
 	if [[ "$prompt_file" == drain.md ]]; then
 		nohup python3 "$DAEMON_HOME/narrator.py" "runs/$ts.log" >/dev/null 2>&1 &
 	fi
-	nohup node "$DAEMON_HOME/bin/run-once.mjs" \
+	nohup "$NODE" "$DAEMON_HOME/bin/run-once.mjs" \
 		--prompt "prompts/$prompt_file" \
 		--log "runs/$ts.log" \
 		--lane "$lane" \
 		--model "$MODEL" \
 		--max-turns "$MAX_TURNS" \
 		--timeout-s "$MAX_RUN_SECONDS" \
-		"$@" >/dev/null 2>&1 &
+		"$@" >>"runs/$ts.log" 2>&1 &
 	echo $! >"$lane/pid"
 	log "spawned $prompt_file in lane ${lane:t} (pid $(cat "$lane/pid"), log runs/$ts.log)"
 }
