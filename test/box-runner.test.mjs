@@ -171,7 +171,7 @@ describe('AC2: argv and env for the claude route are unchanged', () => {
 
 describe('progress and stuck notes', () => {
   test('`working:` notes count turns and name the last tool; a stall gets one stuck note', async () => {
-    const r = await runBox({ mode: 'slow', env: { FAKE_STALL_MS: '1500', PROGRESS_MS: '100', STUCK_MS: '600' } })
+    const r = await runBox({ mode: 'slow', env: { FAKE_STALL_MS: '3500', PROGRESS_MS: '100', STUCK_MS: '2000' } })
     assert.equal(r.completes[0].status, 'done', r.out)
     assert.ok(r.notes.includes('working: turns=2, last tool=Bash'), r.notes.join('\n'))
     const stuck = r.notes.filter((n) => n.startsWith('⚠️ possibly stuck'))

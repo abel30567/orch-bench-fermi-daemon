@@ -120,7 +120,7 @@ export function piMcpConfig(config) {
   const c = typeof config !== 'string' ? config : JSON.parse(config.trim().startsWith('{') ? config : readFileSync(config, 'utf8'))
   const servers = Object.entries(c?.mcpServers ?? {})
   for (const [name, s] of servers)
-    if (!isLocalUrl(s?.url)) throw new Error(`refusing to start: non-localhost MCP server ${name}: ${s?.url ?? 'no url'}`)
+    if (typeof s?.url !== 'string' || !isLocalUrl(s.url)) throw new Error(`refusing to start: non-localhost MCP server ${name}: ${s?.url ?? 'no url'}`)
   return { mcpServers: Object.fromEntries(servers.map(([name, s]) => [name, { url: s.url }])) }
 }
 
@@ -132,14 +132,15 @@ function prepareSandbox({ mcpConfig, sandboxHome }) {
   const config = piMcpConfig(mcpConfig) // first: a refused config leaves nothing behind
   const home = resolve(sandboxHome)
   const agentDir = join(home, '.pi/agent')
-  const realHome = homedir()
-  mkdirSync(home, { recursive: true })
-  // Writing mcp.json here would replace the owner's, and the cleanup would delete their login.
-  if (realpathSync(home) === realpathSync(realHome)) throw new Error('sandboxHome is the real HOME (see harness/pi.mjs)')
+  const realAgentDir = join(homedir(), '.pi/agent')
   mkdirSync(agentDir, { recursive: true })
+  // Writing mcp.json here would replace the owner's, and the cleanup would delete their login.
+  // .native: it resolves a symlinked .pi and the on-disk case of a path on a case-insensitive volume.
+  if (existsSync(realAgentDir) && realpathSync.native(agentDir) === realpathSync.native(realAgentDir))
+    throw new Error('sandboxHome is the real HOME (see harness/pi.mjs)')
   writeFileSync(join(agentDir, 'mcp.json'), JSON.stringify(config, null, 2) + '\n')
   const auth = join(agentDir, 'auth.json')
-  const realAuth = join(realHome, '.pi/agent/auth.json')
+  const realAuth = join(realAgentDir, 'auth.json')
   if (existsSync(realAuth)) copyFileSync(realAuth, auth)
   return { env: { HOME: home, PI_CODING_AGENT_DIR: agentDir }, cleanup: () => rmSync(auth, { force: true }) }
 }
@@ -190,6 +191,8 @@ function open(o) {
   })
   child.stderr.on('data', (d) => events.emit('stderr', d.toString()))
   child.on('exit', (code) => events.emit('exit', code))
+  // pi can exit before it reads stdin (not logged in, bad flag). Unhandled, the EPIPE would kill the host process.
+  child.stdin.on('error', (err) => events.emit('stderr', `pi adapter: stdin: ${err.message}\n`))
   const write = (msg) => {
     if (!child.stdin.writable) return false
     child.stdin.write(JSON.stringify(msg) + '\n')

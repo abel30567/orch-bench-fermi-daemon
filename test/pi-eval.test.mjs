@@ -3,7 +3,7 @@
 // test/conformance/fake-pi.mjs; no real pi, config or credential is touched.
 import { test, describe, before, after, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -35,6 +35,14 @@ const until = async (cond, ms = 5000) => {
 const opts = (extra = {}) => ({ bin, cwd, mcpConfig: config(), sandboxHome, env: { FAKE_PI_PROBE: probe }, ...extra })
 const sandboxAuth = () => join(sandboxHome, '.pi/agent/auth.json')
 const readProbe = () => JSON.parse(readFileSync(probe, 'utf8'))
+// A pi that dies without reading stdin, and a prompt no socket buffer can swallow, so the write always fails.
+const deadPi = (body) => {
+  const p = join(tmp(), 'dead-pi')
+  writeFileSync(p, `#!/bin/sh\n${body}\n`)
+  chmodSync(p, 0o755)
+  return p
+}
+const HUGE = 'x'.repeat(4 * 1024 * 1024)
 
 before(() => {
   bin = join(tmp(), 'pi')
@@ -76,6 +84,10 @@ describe('piMcpConfig', () => {
     ['not a URL', 'localhost'],
   ])
     test(`refuses ${label}`, () => assert.throws(() => piMcpConfig(config(url)), /refusing to start: non-localhost/))
+
+  test('refuses a production URL hidden in an array', () => {
+    assert.throws(() => piMcpConfig(config(['http://localhost/', PROD])), /refusing to start: non-localhost/)
+  })
 
   test('refuses a url-less (stdio) server', () => {
     assert.throws(() => piMcpConfig({ mcpServers: { x: { command: 'npx', args: ['mcp-remote', PROD] } } }), /refusing to start: non-localhost/)
@@ -122,6 +134,19 @@ describe('AC1: pi runs in the sandbox HOME', () => {
     assert.equal(readFileSync(join(realHome, '.pi/agent/auth.json'), 'utf8'), AUTH)
   })
 
+  test('a sandboxHome whose .pi links to the real one is refused and the login survives', () => {
+    symlinkSync(join(realHome, '.pi'), join(sandboxHome, '.pi'))
+    assert.throws(() => runOnce({ ...opts(), prompt: 'turn' }), /sandboxHome is the real HOME/)
+    assert.equal(readFileSync(join(realHome, '.pi/agent/auth.json'), 'utf8'), AUTH)
+  })
+
+  test('a case variant of the real HOME is refused on a case-insensitive volume', (t) => {
+    const variant = realHome.toUpperCase()
+    if (!existsSync(variant)) return t.skip('case-sensitive volume')
+    assert.throws(() => runOnce({ ...opts({ sandboxHome: variant }), prompt: 'turn' }), /sandboxHome is the real HOME/)
+    assert.equal(readFileSync(join(realHome, '.pi/agent/auth.json'), 'utf8'), AUTH)
+  })
+
   test('mcpConfig without sandboxHome, or the reverse, is refused', () => {
     assert.throws(() => runOnce({ ...opts({ sandboxHome: undefined }), prompt: 'turn' }), /mcpConfig without sandboxHome/)
     assert.throws(() => startSession(opts({ mcpConfig: undefined })), /sandboxHome without mcpConfig/)
@@ -164,6 +189,32 @@ describe('AC2: the login copy does not outlive the attempt', () => {
       s.close()
     })
     assert.equal(existsSync(sandboxAuth()), false)
+  })
+
+  for (const [label, body] of [
+    ['at once', 'exit 1'],
+    ['a moment after starting', 'sleep 0.2\nexit 1'],
+  ])
+    test(`pi that dies ${label} without reading stdin: no crash, copy gone, reported`, async () => {
+      const stderr = []
+      const run = runOnce({ ...opts({ bin: deadPi(body) }), prompt: HUGE })
+      run.events.on('stderr', (s) => stderr.push(s))
+      const { code, outcome } = await run.done
+      assert.equal(code, 1)
+      assert.equal(outcome, null)
+      assert.equal(existsSync(sandboxAuth()), false)
+      assert.match(stderr.join(''), /pi adapter: stdin: /)
+    })
+
+  test('a session whose pi dies without reading stdin does not crash the host', async () => {
+    const s = startSession(opts({ bin: deadPi('exit 1') }))
+    const failed = new Promise((resolve) => s.events.once('stderr', resolve))
+    const exited = new Promise((resolve) => s.events.once('exit', resolve))
+    s.send(HUGE)
+    assert.match(await failed, /pi adapter: stdin: /)
+    assert.equal(await exited, 1)
+    assert.equal(existsSync(sandboxAuth()), false)
+    assert.equal(s.send('again'), false)
   })
 
   test('gone when pi cannot be spawned', async () => {
@@ -266,6 +317,21 @@ describe('the eval runner passes a sandbox HOME for pi', () => {
     const seen = readProbe()
     assert.equal(seen.HOME, home)
     assert.match(Object.values(JSON.parse(seen.mcp).mcpServers)[0].url, /^http:\/\/127\.0\.0\.1:\d+\/mcp$/)
+    assert.equal(existsSync(home), false)
+  })
+
+  test('a pi that dies before reading its prompt ends the attempt, not the eval run', async () => {
+    let home
+    const dead = deadPi('exit 1')
+    const harness = {
+      ...pi,
+      runOnce(o) {
+        home = o.sandboxHome
+        return pi.runOnce({ ...o, bin: dead, prompt: HUGE })
+      },
+    }
+    await runAttempt({ scenario, attempt: 1, harness, timeoutMs: 15000, outDir: tmp() })
+    assert.ok(home, 'the harness ran')
     assert.equal(existsSync(home), false)
   })
 

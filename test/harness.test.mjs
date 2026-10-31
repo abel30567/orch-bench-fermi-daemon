@@ -43,7 +43,7 @@ const TODAY_WARM_ARGV = [
 
 describe('AC1: HARNESS unset spawns claude with today\'s argv', { concurrency: true }, () => {
   test('default bin (~/.local/bin/claude)', async () => {
-    const { events, log } = await runWorker({ result: SUCCESS, pending: 0, durationMs: 1000 })
+    const { events, log } = await runWorker({ result: SUCCESS, pending: 0, durationMs: 3000 })
     const spawns = events.filter((e) => e.kind === 'spawn')
     assert.equal(spawns.length, 1, log)
     assert.equal(spawns[0].bin, 'default')
@@ -54,7 +54,7 @@ describe('AC1: HARNESS unset spawns claude with today\'s argv', { concurrency: t
 
   test('CLAUDE_BIN picks the binary, argv unchanged', async () => {
     const alt = script(join(tmp(), 'hbar'), `FAKE_BIN=hbar exec "${process.execPath}" "${FAKE}" "$@"`)
-    const { events, log } = await runWorker({ result: SUCCESS, pending: 0, durationMs: 1000, env: { CLAUDE_BIN: alt } })
+    const { events, log } = await runWorker({ result: SUCCESS, pending: 0, durationMs: 3000, env: { CLAUDE_BIN: alt } })
     const spawns = events.filter((e) => e.kind === 'spawn')
     assert.equal(spawns.length, 1, log)
     assert.equal(spawns[0].bin, 'hbar')
@@ -134,7 +134,7 @@ describe('AC2: recorded Claude stream → normalized events (golden)', () => {
   })
 
   test('the warm worker writes the raw log and the normalized log for a drain turn', async () => {
-    const { runs, log } = await runWorker({ result: SUCCESS, durationMs: 1500, env: { FAKE_STREAM: STREAM } })
+    const { runs, log } = await runWorker({ result: SUCCESS, durationMs: 3000, env: { FAKE_STREAM: STREAM } })
     const first = Object.keys(runs).filter((f) => /^warm-\d+\.log$/.test(f)).sort()[0]
     assert.ok(first, log)
     assert.equal(runs[first], readFileSync(STREAM, 'utf8'))
