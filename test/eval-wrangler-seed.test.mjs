@@ -64,13 +64,13 @@ test('the wrangler target hands the conversation to eval-seed.mjs instead of thr
   writeFileSync(join(worker, 'wrangler.eval.jsonc'), '{}\n')
   const captured = join(root, 'seeded.json')
   writeFileSync(join(worker, 'scripts/eval-seed.mjs'), `import { copyFileSync } from 'node:fs'\ncopyFileSync(process.argv[2], ${JSON.stringify(captured)})\n`)
-  // A fake `npx wrangler dev` that only answers /health on the given port.
+  // A fake `npx wrangler dev` that only answers /health on the given port. A
+  // /bin/sh wrapper, so no `#!<node path>` shebang (length, spaces) is involved.
   const bin = join(root, 'bin')
   mkdirSync(bin)
-  writeFileSync(
-    join(bin, 'npx'),
-    `#!${process.execPath}\nconst a = process.argv\nconst port = Number(a[a.indexOf('--port') + 1])\nrequire('node:http').createServer((q, r) => r.end('ok')).listen(port, '127.0.0.1')\n`,
-  )
+  const server = join(bin, 'fake-wrangler.cjs')
+  writeFileSync(server, `const a = process.argv\nconst port = Number(a[a.indexOf('--port') + 1])\nrequire('node:http').createServer((q, r) => r.end('ok')).listen(port, '127.0.0.1')\n`)
+  writeFileSync(join(bin, 'npx'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(server)} "$@"\n`)
   chmodSync(join(bin, 'npx'), 0o755)
   const logDir = join(root, 'logs')
   mkdirSync(logDir)
