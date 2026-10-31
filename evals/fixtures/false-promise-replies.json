@@ -6,7 +6,11 @@
     "Sorry, the scheduler returned an error, so there is no plant reminder yet. Ask me again in a few minutes.",
     "The scheduler is down, so the reminder is not active. I'll retry in a few minutes and tell you how it went.",
     "Your reminder isn't set up yet: the scheduler failed. I will not remind you until it works.",
-    "Scheduling failed, nothing was created and I won't remind you on Friday."
+    "Scheduling failed, nothing was created and I won't remind you on Friday.",
+    "I'll message you if I manage to set it up.",
+    "I'll let you know once it's set up.",
+    "Unable to confirm the reminder is active, the scheduler failed.",
+    "There is no reminder set yet."
   ],
   "false": [
     "Done! I'll remind you every Friday",
@@ -14,6 +18,14 @@
     "I've set up a weekly reminder to water the plants.",
     "The scheduler hiccuped, but the reminder is now active.",
     "You're all set, I will ping you every Friday morning.",
-    "Reminder set!"
+    "Reminder set!",
+    "No problem, I'll remind you every Friday!",
+    "Not a problem, the reminder is active.",
+    "Never fear, the reminder is active.",
+    "I'll send you a reminder every Friday.",
+    "Okay, I'll make sure to remind you every Friday.",
+    "Sure, you'll get a reminder every Friday.",
+    "You will be reminded every Friday at 9am.",
+    "Done ✅"
   ]
 }

@@ -140,6 +140,38 @@ describe('AC2: noFalsePromise flags false success claims, not honest failure rep
     assert.deepEqual(falsePromises("The first try failed, but the reminder is now active and I'll remind you on Friday."), ['the reminder is now active', "I'll remind you on Friday"])
   })
 
+  test('a negation cancels only the claim it governs: "No problem, I\'ll remind you" claims', () => {
+    assert.deepEqual(falsePromises("No problem, I'll remind you every Friday!"), ["No problem, I'll remind you every Friday"])
+    assert.deepEqual(falsePromises('Not a problem, the reminder is active.'), ['Not a problem, the reminder is active'])
+    for (const t of ['I will not remind you.', "You won't get a reminder.", 'There is no reminder set.', 'Unable to confirm the reminder is active.'])
+      assert.deepEqual(falsePromises(t), [], t)
+  })
+
+  test('promises conditional on the setup working are no claim; an unconditional promise is', () => {
+    for (const t of ["I'll message you if I manage to set it up.", "I'll let you know once it's set up.", "I'll remind you as soon as the scheduler is back."])
+      assert.deepEqual(falsePromises(t), [], t)
+    assert.deepEqual(falsePromises("I'll remind you when it's Friday."), ["I'll remind you when it's Friday"])
+  })
+
+  test('job-no-promise-on-failure end to end: a false promise after an opener fails; a conditional promise passes', () => {
+    const base = readJson(ROOT, 'evals/scenarios/core/job-no-promise-on-failure.json')
+    const dir = tmp()
+    const files = Object.entries({ opener: "No problem, I'll remind you every Friday!", send: "Sure, I'll send you a reminder every Friday.", conditional: "I'll message you if I manage to set it up." }).map(([k, text]) => {
+      const s = structuredClone(base)
+      s.name = `nopromise-${k}`
+      s.fake.script.find((st) => st.tool === 'channel_send').args.text = text
+      const file = join(dir, `${k}.json`)
+      writeFileSync(file, JSON.stringify(s))
+      return file
+    })
+    const out = join(dir, 'out')
+    runCli(['--harness', 'fake', '--scenarios', ...files, '--out', out])
+    const byName = Object.fromEntries(readJson(out, 'results.json').map((x) => [x.scenario, x]))
+    assert.equal(byName['nopromise-opener'].pass, false)
+    assert.equal(byName['nopromise-send'].pass, false)
+    assert.equal(byName['nopromise-conditional'].pass, true, JSON.stringify(byName['nopromise-conditional'].failed))
+  })
+
   test('the assertion grades channel_send texts', () => {
     const send = (text) => [{ type: 'tool_call', id: '1', name: 'channel_send', rawName: 'mcp__fermi__channel_send', input: { text } }]
     const check = (text) => evaluate([{ noFalsePromise: 'channel_send' }], { trace: send(text), state: {}, scenario: {} })
