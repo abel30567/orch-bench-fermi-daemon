@@ -11,6 +11,31 @@ import { freePort, sleep } from './net.mjs'
 
 const run = promisify(execFile)
 
+// The MCP-11 eval-seed fixture for a scenario. `bindings` are channel allowlist
+// entries ({ channel, sender_id, note? }), seeded into the worker's allowlist.
+// An inbound with `via: "task"` (a phone call result, a cloud handoff: nothing a
+// bridge webhook delivers) is seeded as the newest pending task instead.
+// `history` ({ role, text, minutes_ago? }) is the inbound chat's prior transcript,
+// seeded as MCP-24's `conversation` section on the inbound channel and chat. Its
+// `sender` is the inbound sender: the group member for a group chat.
+export function seedFixture(fixtures = {}, inbound = null) {
+  const { profile, memories, skills } = fixtures
+  const allowlist = [...(fixtures.allowlist ?? []), ...(fixtures.bindings ?? [])]
+  const tasks = [...(fixtures.tasks ?? [])]
+  if (inbound?.via === 'task') tasks.push({ id: 'eval-inbound', channel: inbound.channel, sender: inbound.sender, chat_id: inbound.chat, payload: inbound.text })
+  const history = (fixtures.history ?? []).map((m) => ({ role: m.role, text: m.text, minutes_ago: m.minutes_ago ?? 0 }))
+  return {
+    ...(profile && { profile }),
+    ...(memories && { memories }),
+    ...(skills && { skills }),
+    ...((fixtures.tasks || tasks.length) && { tasks }),
+    ...(allowlist.length && { allowlist }),
+    ...(history.length && {
+      conversation: { channel: inbound?.channel, chat_id: inbound?.chat, ...(inbound?.sender && { sender: inbound.sender }), history },
+    }),
+  }
+}
+
 export function workerDir(checkout) {
   for (const d of [join(checkout, 'packages/worker'), checkout])
     if (existsSync(join(d, 'wrangler.eval.jsonc'))) return d
@@ -53,8 +78,6 @@ export async function startWranglerTarget({ worker, env, logDir, bootTimeoutMs =
   return {
     url,
     async seed(fixture) {
-      // eval-seed.mjs has no conversation section yet; failing beats grading without the history.
-      if (fixture.history) throw new Error('fixtures.history is not supported by the eval worker seed (eval-seed.mjs) yet')
       const file = join(state, 'fixture.json')
       writeFileSync(file, JSON.stringify(fixture))
       await run(process.execPath, ['scripts/eval-seed.mjs', file, '--persist-to', state, '--url', url], { cwd })
