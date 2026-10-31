@@ -19,6 +19,11 @@ export type SlackMessageEvent = {
 	ts?: string
 }
 
+export type SlackEnvelope = {
+	team_id?: string
+	event?: SlackMessageEvent
+}
+
 export type ForwardableEvent = SlackMessageEvent & {
 	user: string
 	channel: string
@@ -68,6 +73,30 @@ export function buildInbound(
 		// Derived only from the event, so every retry carries the same id.
 		message_id: event.client_msg_id || event.ts,
 	}
+}
+
+// Returns null for envelopes the bridge does not forward.
+export async function inboundFromEnvelope(
+	body: SlackEnvelope,
+	botUserId: string | undefined,
+	resolveName: (userId: string) => Promise<string>,
+): Promise<Inbound | null> {
+	const event = body.event
+	if (!event || event.type !== 'message') return null
+	if (event.bot_id || event.subtype || event.hidden) return null
+	const text = event.text
+	const authorId = event.user
+	const channelId = event.channel
+	if (!text || !authorId || !channelId) return null
+	if (botUserId && authorId === botUserId) return null
+
+	const displayName = await resolveName(authorId)
+	const teamId = body.team_id ?? event.team ?? null
+	return buildInbound(
+		{ ...event, user: authorId, channel: channelId, text },
+		displayName,
+		teamId,
+	)
 }
 
 export async function forwardToWorker(config: Config, msg: Inbound): Promise<void> {

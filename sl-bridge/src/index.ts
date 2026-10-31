@@ -1,7 +1,7 @@
 import { SocketModeClient } from '@slack/socket-mode'
 import { WebClient } from '@slack/web-api'
 import { loadConfig } from './config.ts'
-import { buildInbound, forwardToWorker, type SlackMessageEvent } from './inbound.ts'
+import { forwardToWorker, inboundFromEnvelope, type SlackEnvelope } from './inbound.ts'
 import { log } from './log.ts'
 import { startOutboxLoop } from './outbox.ts'
 
@@ -13,11 +13,6 @@ process.on('uncaughtException', (err) => {
 	log(`FATAL uncaughtException: ${String(err)}`)
 	process.exit(1)
 })
-
-type SlackEnvelope = {
-	team_id?: string
-	event?: SlackMessageEvent
-}
 
 async function main(): Promise<void> {
 	const config = loadConfig()
@@ -79,22 +74,8 @@ async function main(): Promise<void> {
 		async ({ ack, body }: { ack: () => Promise<void>; body: SlackEnvelope }) => {
 			// Ack first so Slack does not retry while we forward.
 			await ack()
-			const event = body.event
-			if (!event || event.type !== 'message') return
-			if (event.bot_id || event.subtype || event.hidden) return
-			const text = event.text
-			const authorId = event.user
-			const channelId = event.channel
-			if (!text || !authorId || !channelId) return
-			if (botUserId && authorId === botUserId) return
-
-			const displayName = await resolveName(authorId)
-			const teamId = body.team_id ?? event.team ?? null
-			const msg = buildInbound(
-				{ ...event, user: authorId, channel: channelId, text },
-				displayName,
-				teamId,
-			)
+			const msg = await inboundFromEnvelope(body, botUserId, resolveName)
+			if (!msg) return
 			forwardToWorker(config, msg).catch((err) => {
 				log(`forwardToWorker error: ${String(err)}`)
 			})

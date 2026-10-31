@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { mock, test } from 'node:test'
 import type { Config } from '../src/config.ts'
-import { buildInbound, forwardToWorker } from '../src/inbound.ts'
+import { buildInbound, forwardToWorker, inboundFromEnvelope } from '../src/inbound.ts'
 
 const event = { type: 'message', user: 'U1', channel: 'C1', text: 'hello', ts: '1700000000.000100' }
 
@@ -72,6 +72,49 @@ test('a redelivered event builds the same message_id', () => {
 		buildInbound(redelivered, 'Test User', 'T1').message_id,
 		buildInbound(structuredClone(redelivered), 'Test User', 'T1').message_id,
 	)
+})
+
+test('inboundFromEnvelope carries the raw event ids into message_id', async () => {
+	const resolveName = async (userId: string) => `name-${userId}`
+	const withClientId = await inboundFromEnvelope(
+		{ team_id: 'T1', event: { ...event, client_msg_id: 'client-1' } },
+		'B1',
+		resolveName,
+	)
+	assert.deepEqual(withClientId, {
+		author_id: 'U1',
+		display_name: 'name-U1',
+		channel_id: 'C1',
+		team_id: 'T1',
+		is_im: false,
+		text: 'hello',
+		message_id: 'client-1',
+	})
+	const tsOnly = await inboundFromEnvelope({ event }, 'B1', resolveName)
+	assert.equal(tsOnly?.message_id, event.ts)
+})
+
+test('inboundFromEnvelope skips what the bridge does not forward', async () => {
+	const lookups: string[] = []
+	const resolveName = async (userId: string) => {
+		lookups.push(userId)
+		return userId
+	}
+	const skipped = [
+		{},
+		{ event: { ...event, type: 'reaction_added' } },
+		{ event: { ...event, bot_id: 'B9' } },
+		{ event: { ...event, subtype: 'message_changed' } },
+		{ event: { ...event, hidden: true } },
+		{ event: { ...event, text: '' } },
+		{ event: { ...event, user: undefined } },
+		{ event: { ...event, channel: undefined } },
+		{ event: { ...event, user: 'B1' } },
+	]
+	for (const envelope of skipped) {
+		assert.equal(await inboundFromEnvelope(envelope, 'B1', resolveName), null)
+	}
+	assert.deepEqual(lookups, [])
 })
 
 test('every retry of a delivery posts the same message_id', async (t) => {
