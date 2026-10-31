@@ -17,6 +17,8 @@
 //   'raw'    one raw output line, for logs in the harness's native format
 //   'stderr' a stderr chunk (string)
 //   'exit'   the exit code
+//   'spawn_error'  runOnce only: the harness process could not be spawned (Error);
+//                  `done` still resolves
 //
 // Normalized events ({ type, ... }):
 //   init        { harness, version, model, tools[] }
