@@ -6,7 +6,7 @@
 //   node bin/run-once.mjs --prompt prompts/drain.md --log runs/<ts>.log \
 //     [--lane lanes/<n>] [--session session.id] [--model M] [--max-turns N] [--timeout-s S]
 //
-// --log      raw harness output (stream-json) plus stderr, appended
+// --log      raw harness output (stream-json) plus stderr and any spawn error, appended
 // --lane     lane dir from poll.sh's acquire_lane; removed when this process exits
 // --session  resume the session id in this file (if any), then store the run's id there
 // --timeout-s watchdog: SIGTERM the harness after S seconds, SIGKILL 2s later (exit 124)
@@ -96,9 +96,10 @@ const watchdog =
     killTimer = setTimeout(() => run.close('SIGKILL'), KILL_GRACE_MS)
   }, Number(o['timeout-s']) * 1000)
 
-const { code } = await run.done
+const { code, spawnError } = await run.done
 clearTimeout(watchdog)
 clearTimeout(killTimer)
+if (spawnError) note(`spawn error: ${spawnError.message}`)
 if (o.session && sessionId && !timedOut) writeFileSync(o.session, sessionId + '\n')
 note(`exit ${timedOut ? 'watchdog' : code}`)
 out.end(() => process.exit(timedOut ? 124 : (code ?? 1)))
