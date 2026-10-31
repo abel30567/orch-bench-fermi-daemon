@@ -5,6 +5,9 @@
 //   runOnce       `codex exec --json -`: one prompt on stdin, JSONL events out.
 // Both report the same thread items (app-server in camelCase, exec in snake_case),
 // mapped to the normalized stream by toolCall/toolResult below.
+// A codex that exits (or never spawns) with a turn in flight ends it as
+// turn_end { ok: false, kind: 'crash' } once its output is drained; stream
+// errors (EPIPE on a write after codex died) are ignored, never thrown.
 //
 // Options beyond the contract:
 //   bin        default env CODEX_BIN, else `codex` on PATH
@@ -12,9 +15,9 @@
 //              has no --mcp-config flag, so each session/run gets its own CODEX_HOME:
 //              a temp dir holding config.toml with those servers (and no user config,
 //              connectors, plugins or browser/computer use) plus a copy of authFile if
-//              given; it is removed when the process closes or fails to spawn (not if
-//              this process is SIGKILLed). Every server URL must be localhost, else the
-//              adapter throws. Without
+//              given; it is removed when the process closes or fails to spawn, an early
+//              exit included (not if this process is SIGKILLed). Every server URL must be
+//              localhost, else the adapter throws. Without
 //              mcpConfig codex runs with the real CODEX_HOME (user config, MCP
 //              servers, connectors); the eval runner and judge always pass one.
 //   authFile   with mcpConfig: an auth.json (e.g. ~/.codex/auth.json, passed by
@@ -117,17 +120,17 @@ function spawnCodex(args, o) {
   if (bad.length) throw new Error(`codex adapter: unsupported option(s) ${bad.join(', ')} (see harness/codex.mjs)`)
   const env = { ...(o.sandbox ? {} : process.env), ...o.env, ...o.sandbox?.env } // sandboxed: nothing ambient
   let home = null
-  if (o.mcpConfig) {
-    const config = codexConfig(o.mcpConfig, { ...(o.sandbox && { sandboxMode: 'danger-full-access' }), provider: o.provider, model: o.model })
-    home = mkdtempSync(join(o.sandbox?.root ?? tmpdir(), 'codex-home-'))
-    writeFileSync(join(home, 'config.toml'), config)
-    if (o.provider) env[PROXY_ENV_KEY] = o.provider.apiKey
-    else if (o.authFile != null) copyFileSync(o.authFile, join(home, 'auth.json'))
-    env.CODEX_HOME = home
-  }
   const cleanup = () => home && rmSync(home, { recursive: true, force: true })
   let child
   try {
+    if (o.mcpConfig) {
+      const config = codexConfig(o.mcpConfig, { ...(o.sandbox && { sandboxMode: 'danger-full-access' }), provider: o.provider, model: o.model })
+      home = mkdtempSync(join(o.sandbox?.root ?? tmpdir(), 'codex-home-'))
+      writeFileSync(join(home, 'config.toml'), config)
+      if (o.provider) env[PROXY_ENV_KEY] = o.provider.apiKey
+      else if (o.authFile != null) copyFileSync(o.authFile, join(home, 'auth.json'))
+      env.CODEX_HOME = home
+    }
     const bin = o.bin || process.env.CODEX_BIN || 'codex'
     const [cmd, argv] = o.sandbox ? o.sandbox.wrap(bin, args) : [bin, args]
     child = spawn(cmd, argv, { cwd: o.cwd, env, stdio: ['pipe', 'pipe', 'pipe'] })
@@ -135,6 +138,8 @@ function spawnCodex(args, o) {
     cleanup()
     throw err
   }
+  // codex may exit before reading a prompt: its stdin then fails with EPIPE.
+  for (const s of [child.stdin, child.stdout, child.stderr]) s.on('error', () => {})
   child.on('error', cleanup) // a spawn failure (missing bin, bad cwd)
   child.on('close', cleanup)
   return child
@@ -233,6 +238,8 @@ export function classifyError(error) {
 
 const okOutcome = (text) => classifyResult({ is_error: false, result: text ?? '' })
 
+const crashOutcome = (code, signal) => ({ ok: false, kind: 'crash', detail: `codex exited (${code ?? signal}) mid-turn` })
+
 // `codex exec --json` events → normalized events. start() before the run.
 export function createExecNormalizer() {
   const items = itemTracker()
@@ -276,8 +283,9 @@ export function startSession(o) {
   const events = new EventEmitter()
   const emit = (ev) => events.emit('event', ev)
   const items = itemTracker()
+  let closed = false
   const write = (msg) => {
-    if (!child.stdin.writable) return false
+    if (closed || !child.stdin.writable) return false
     child.stdin.write(JSON.stringify(msg) + '\n')
     return true
   }
@@ -328,7 +336,10 @@ export function startSession(o) {
   const interruptTurn = () => request('turn/interrupt', { threadId, turnId: turn.id }).catch(() => {})
 
   // The process is gone: fail whatever still waits on an answer (initialize, turn/start).
-  child.on('close', () => {
+  // 'close': stdout and stderr are drained, so a real turn_end and all of stderr came first.
+  child.on('close', (code, signal) => {
+    closed = true
+    if (turn) endTurn(crashOutcome(code, signal), null)
     for (const p of pending.values()) p.reject(new Error('codex app-server exited'))
     pending.clear()
   })
@@ -370,10 +381,10 @@ export function startSession(o) {
     pid: child.pid,
     events,
     get alive() {
-      return child.stdin.writable
+      return !closed && child.stdin.writable
     },
     send(text) {
-      if (!child.stdin.writable) return false
+      if (closed || !child.stdin.writable) return false
       const t = (turn = { id: null, since: Date.now(), last: '', interrupt: false })
       usageAtStart = usage
       ready
@@ -392,7 +403,9 @@ export function startSession(o) {
       else turn.interrupt = true // turn/start has not answered yet
       return true
     },
+    // A codex we kill (a timeout, the session's end) did not crash.
     close(signal) {
+      turn = null
       child.kill(signal)
     },
   }
@@ -405,6 +418,7 @@ export function runOnce(o) {
   const all = []
   let outcome = null
   let stderr = ''
+  const since = Date.now()
   events.on('event', (ev) => {
     all.push(ev)
     if (ev.type === 'turn_end') outcome = ev
@@ -413,7 +427,19 @@ export function runOnce(o) {
   norm.start()
   setImmediate(() => events.emit('event', { type: 'init', harness: name, version: null, model: o.model ?? null, tools: CODEX_BUILTINS }))
   pipe(child, events, (j) => norm.normalize(j).forEach((ev) => events.emit('event', ev)))
-  const done = new Promise((resolve) => child.on('close', (code) => resolve({ code, outcome, events: all, stderr })))
+  let killed = false
+  const done = new Promise((resolve) =>
+    child.on('close', (code, signal) => {
+      // 'close': stdout and stderr are drained, so a real turn_end and all of stderr came first.
+      if (!outcome && !killed) events.emit('event', { type: 'turn_end', ...crashOutcome(code, signal), durationMs: Date.now() - since, raw: null })
+      resolve({ code, outcome, events: all, stderr })
+    }),
+  )
   child.stdin.end(o.prompt ?? '')
-  return { pid: child.pid, events, done, close: (signal) => child.kill(signal) }
+  // A codex we kill (a timeout) did not crash.
+  const close = (signal) => {
+    killed = true
+    child.kill(signal)
+  }
+  return { pid: child.pid, events, done, close }
 }
