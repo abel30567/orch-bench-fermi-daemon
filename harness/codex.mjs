@@ -32,6 +32,9 @@
 //              sandbox off (sandbox_mode = "danger-full-access"): a nested sandbox-exec
 //              fails inside ours, and ours already bounds it. Never set without `sandbox`.
 //   runOnce only: skipPermissions (--dangerously-bypass-approvals-and-sandbox)
+// A runOnce whose codex exits (or never spawns) before ending its turn ends it as
+// turn_end { ok: false, kind: 'crash' }, stderr captured; stream errors (EPIPE on the
+// prompt after codex died) are ignored, never thrown. A run the caller closes did not crash.
 // allowedTools and runOnce's maxTurns/settingSources/resume have no codex
 // equivalent and are ignored. tokenFd, tokenPipe, configDir and scrubSubprocessEnv are
 // refused (they promise an isolation codex cannot give; see below).
@@ -143,6 +146,8 @@ function spawnCodex(args, o) {
 // Emit each stdout line as 'raw' and its JSON to onJson; stderr and exit as-is.
 // Split on LF only: records may hold U+2028/U+2029, which readline splits on.
 function pipe(child, events, onJson) {
+  // codex may exit before reading its stdin: a write then fails with EPIPE. Never thrown.
+  for (const st of [child.stdin, child.stdout, child.stderr]) st.on('error', () => {})
   let buf = ''
   child.stdout.on('data', (d) => {
     buf += d.toString()
@@ -413,7 +418,20 @@ export function runOnce(o) {
   norm.start()
   setImmediate(() => events.emit('event', { type: 'init', harness: name, version: null, model: o.model ?? null, tools: CODEX_BUILTINS }))
   pipe(child, events, (j) => norm.normalize(j).forEach((ev) => events.emit('event', ev)))
-  const done = new Promise((resolve) => child.on('close', (code) => resolve({ code, outcome, events: all, stderr })))
+  let killed = false
+  const t0 = Date.now()
+  // 'close': stdout and stderr are drained, so a real turn_end and all of stderr came first.
+  const done = new Promise((resolve) =>
+    child.on('close', (code, signal) => {
+      if (!outcome && !killed) events.emit('event', { type: 'turn_end', ok: false, kind: 'crash', detail: `codex exited (${code ?? signal}) without ending the turn`, durationMs: Date.now() - t0, raw: null })
+      resolve({ code, outcome, events: all, stderr })
+    }),
+  )
   child.stdin.end(o.prompt ?? '')
-  return { pid: child.pid, events, done, close: (signal) => child.kill(signal) }
+  // A codex the caller kills (a timeout) did not crash.
+  const close = (signal) => {
+    killed = true
+    child.kill(signal)
+  }
+  return { pid: child.pid, events, done, close }
 }
