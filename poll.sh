@@ -22,6 +22,7 @@ MAX_RUNS_PER_HOUR="${MAX_RUNS_PER_HOUR:-0}"  # 0/unset = unlimited; set >0 to ca
 HEARTBEAT_SECONDS="${HEARTBEAT_SECONDS:-1800}"
 MAX_TURNS="${MAX_TURNS:-50}"
 MODEL="${MODEL:-claude-opus-4-6[1m]}"        # model for daemon claude -p runs (1M-context Opus 4.6)
+NODE="${NODE_BIN:-$(command -v node)}"       # node for bin/run-once.mjs (>= 22); launchd's PATH may lack it
 # Allowed tools and setting sources match the warm worker (lib/run-policy.mjs).
 LANE_DIR="$DAEMON_HOME/lanes"
 mkdir -p "$LANE_DIR"
@@ -82,10 +83,20 @@ acquire_lane() {
 # Detached nohup spawn from the clean dir (EINTR-safe) of bin/run-once.mjs,
 # which runs the harness, enforces the MAX_RUN_SECONDS watchdog and removes the
 # lane on exit. Only heartbeat runs pass --session (resume from and store
-# session.id): concurrent drain runs must not race on it.
+# session.id): concurrent drain runs must not race on it. The cold path is the
+# fallback for a down warm worker, so a missing or too-old node is a loud error
+# (one poll.log line, non-zero exit), never a silent spawn that dies unseen.
 spawn_run() {
 	local prompt_file="$1"
 	shift
+	local node_version="" node_major=0
+	[[ -n "$NODE" ]] && node_version=$("$NODE" -v 2>/dev/null)
+	node_version="${node_version#v}"
+	[[ "${node_version%%.*}" == <-> ]] && node_major="${node_version%%.*}"
+	if (( node_major < 22 )); then
+		log "ERROR: node '${NODE:-node}' is v${node_version:-unknown}; bin/run-once.mjs needs node >= 22 (set NODE_BIN in .env) — not spawning $prompt_file"
+		exit 1
+	fi
 	local lane
 	lane=$(acquire_lane) || { log "all $MAX_CONCURRENT lanes busy — deferring $prompt_file"; return 1; }
 	local ts
@@ -95,14 +106,14 @@ spawn_run() {
 	if [[ "$prompt_file" == drain.md ]]; then
 		nohup python3 "$DAEMON_HOME/narrator.py" "runs/$ts.log" >/dev/null 2>&1 &
 	fi
-	nohup node "$DAEMON_HOME/bin/run-once.mjs" \
+	nohup "$NODE" "$DAEMON_HOME/bin/run-once.mjs" \
 		--prompt "prompts/$prompt_file" \
 		--log "runs/$ts.log" \
 		--lane "$lane" \
 		--model "$MODEL" \
 		--max-turns "$MAX_TURNS" \
 		--timeout-s "$MAX_RUN_SECONDS" \
-		"$@" >/dev/null 2>&1 &
+		"$@" >>"runs/$ts.log" 2>&1 &
 	echo $! >"$lane/pid"
 	log "spawned $prompt_file in lane ${lane:t} (pid $(cat "$lane/pid"), log runs/$ts.log)"
 }
