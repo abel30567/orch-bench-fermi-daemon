@@ -235,6 +235,7 @@ export function runOnce(o) {
     }
   })
   events.on('stderr', (s) => (stderr += s))
+  child.on('error', (err) => events.emit('error', err)) // spawn failure; 'close' still follows
   const done = new Promise((resolve) => child.on('close', (code) => resolve({ code, outcome, events: all, stderr })))
   send(o.prompt ?? '')
   return { pid: child.pid, events, done, close: (signal) => child.kill(signal) }

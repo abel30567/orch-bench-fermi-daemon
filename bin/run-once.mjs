@@ -75,6 +75,8 @@ run.events.on('raw', (line) => {
   } catch {}
 })
 run.events.on('stderr', (s) => out.write(s))
+// poll.sh discards our stdout/stderr: a harness that can't be spawned must leave its reason here.
+run.events.on('error', (e) => note(`spawn error: ${e.message}`))
 
 // poll.sh's reaper SIGTERMs us on its own watchdog; take the harness down with us.
 for (const sig of ['SIGTERM', 'SIGINT']) {
