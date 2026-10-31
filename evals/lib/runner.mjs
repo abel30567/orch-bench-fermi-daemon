@@ -51,7 +51,8 @@ async function seedSecrets(url, secrets = []) {
 
 const urlEntries = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => /^[a-z]+:\/\//i.test(String(v))))
 
-export async function runAttempt({ scenario, attempt, harness, model, worker, timeoutMs, outDir }) {
+// `startTarget` swaps the in-process fake target (tests only); `worker` still wins.
+export async function runAttempt({ scenario, attempt, harness, model, worker, timeoutMs, outDir, startTarget = startFakeTarget }) {
   const dir = join(outDir, scenario.name, String(attempt))
   mkdirSync(dir, { recursive: true })
   const closers = []
@@ -64,12 +65,17 @@ export async function runAttempt({ scenario, attempt, harness, model, worker, ti
     closers.push(fakes.close)
     const env = { ...fakes.env, ...EVAL_SECRETS }
     assertLocalUrls(urlEntries(env))
-    const target = worker ? await startWranglerTarget({ worker, env, logDir: dir }) : await startFakeTarget({ env })
+    const target = worker ? await startWranglerTarget({ worker, env, logDir: dir }) : await startTarget({ env })
     closers.push(target.close)
     assertLocalUrls({ target: target.url })
     await target.seed(seedFixture(scenario.fixtures, scenario.inbound))
     await seedSecrets(target.url, scenario.fixtures?.secrets)
-    const proxy = await startMcpProxy({ target: target.url, faults: scenario.faults })
+    const record = (ev) => {
+      trace.push(ev)
+      appendFileSync(join(dir, 'trace.jsonl'), JSON.stringify(ev) + '\n')
+    }
+    // onNote: a dropped SSE stream is a non-fatal trace note, never a crash or a failure.
+    const proxy = await startMcpProxy({ target: target.url, faults: scenario.faults, onNote: record })
     closers.push(proxy.close)
     const mcpConfig = { mcpServers: { fermi: { type: 'http', url: `${proxy.url}/mcp` } } }
     assertLocalUrls(Object.fromEntries(Object.entries(mcpConfig.mcpServers).map(([k, s]) => [`mcp:${k}`, s.url])))
@@ -100,10 +106,7 @@ export async function runAttempt({ scenario, attempt, harness, model, worker, ti
     const run = scenario.session
       ? runSession(harness, { ...harnessOpts, systemPrompt: drainPrompt, script: scenario.fake?.turns }, { turns: scenario.session, inbound: scenario.inbound })
       : harness.runOnce({ ...harnessOpts, prompt: drainPrompt, script: scenario.fake?.script }) // the fake harness's script; real adapters ignore it
-    run.events.on('event', (ev) => {
-      trace.push(ev)
-      appendFileSync(join(dir, 'trace.jsonl'), JSON.stringify(ev) + '\n')
-    })
+    run.events.on('event', record)
     run.events.on('raw', (line) => appendFileSync(join(dir, 'raw.log'), line + '\n'))
     run.events.on('stderr', (s) => appendFileSync(join(dir, 'stderr.log'), s))
     let timer
