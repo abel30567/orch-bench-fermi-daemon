@@ -1,13 +1,15 @@
 // The harness's `fermi` MCP server: a localhost pass-through to the eval target's
 // /mcp that injects a scenario's faults. `faults` maps a bare tool name to
 // { error?: string, latencyMs?: number }: latency delays the call, error answers
-// it with an isError result without reaching the target.
+// it with an isError result without reaching the target. A stream error on either
+// side (the upstream SSE cut when the target shuts down, or the client hanging up)
+// destroys both sides and goes to `onError` once, never out of the run.
 import { Readable } from 'node:stream'
 import { readBody, sendJson, serve, sleep } from './net.mjs'
 
 const HOP = new Set(['host', 'connection', 'content-length', 'transfer-encoding', 'keep-alive'])
 
-export async function startMcpProxy({ target, faults = {} }) {
+export async function startMcpProxy({ target, faults = {}, onError = () => {} }) {
   return serve(async (req, res) => {
     const body = req.method === 'POST' ? await readBody(req) : undefined
     let msg = null
@@ -24,7 +26,23 @@ export async function startMcpProxy({ target, faults = {} }) {
     const out = {}
     up.headers.forEach((v, k) => !HOP.has(k) && k !== 'content-encoding' && (out[k] = v))
     res.writeHead(up.status, out)
-    if (up.body) Readable.fromWeb(up.body).pipe(res)
-    else res.end()
+    if (!up.body) return res.end()
+    const src = Readable.fromWeb(up.body)
+    let reported = false
+    const fail = (err) => {
+      if (!reported) {
+        reported = true
+        try {
+          onError(err)
+        } catch {}
+      }
+      src.destroy()
+      res.destroy()
+    }
+    src.on('error', fail)
+    res.on('error', fail)
+    // The client hung up before the upstream finished: stop reading it.
+    res.on('close', () => !res.writableFinished && src.destroy())
+    src.pipe(res)
   })
 }
