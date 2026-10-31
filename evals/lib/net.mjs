@@ -1,16 +1,8 @@
 // Small localhost HTTP helpers shared by the fakes, the fake target and the proxy.
 import http from 'node:http'
+import { isLocalUrl } from '../../lib/local-url.mjs'
 
-const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1'])
-
-export function isLocalUrl(url) {
-  try {
-    const u = new URL(url)
-    return (u.protocol === 'http:' || u.protocol === 'https:') && LOCAL_HOSTS.has(u.hostname)
-  } catch {
-    return false
-  }
-}
+export { isLocalUrl }
 
 // Throws if any { name: url } entry is not a localhost URL. The evals must never
 // reach a real Fermi, chat API or Mac.
