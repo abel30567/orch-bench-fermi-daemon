@@ -111,6 +111,7 @@ function runStats(results) {
     // Unknown when any attempt has no cost: a partial mean would understate it.
     costPerTaskUsd: costs.length && costs.every((c) => c != null) ? mean(costs) : null,
     toolCallsPerTask: mean(g.map((r) => r.toolCalls?.length ?? 0)),
+    internalToolCallsPerTask: mean(g.map((r) => r.internalToolCalls?.length ?? 0)),
     errorKinds,
     protocolViolations: g.filter((r) => (r.failed ?? []).some((f) => f.assertion && PROTOCOL_ASSERTIONS.includes(Object.keys(f.assertion)[0]))).length,
   }
@@ -130,6 +131,7 @@ export function compare(baseline, candidate, { k = GATE.k, judge = {} } = {}) {
     p95Latency: ratio(stats.candidate.p95LatencyMs, stats.baseline.p95LatencyMs),
     cost: ratio(stats.candidate.costPerTaskUsd, stats.baseline.costPerTaskUsd),
     toolCalls: ratio(stats.candidate.toolCallsPerTask, stats.baseline.toolCallsPerTask),
+    internalToolCalls: ratio(stats.candidate.internalToolCallsPerTask, stats.baseline.internalToolCallsPerTask),
   }
   const crit = C[GATE.criticalCategory]
   const fmt = (x, d = 2) => (x == null ? 'n/a' : Number.isFinite(x) ? x.toFixed(d) : String(x))
@@ -223,6 +225,7 @@ export function renderMarkdown(report) {
     `| p95 latency (ms) | ${num(stats.baseline.p95LatencyMs, 0)} | ${num(stats.candidate.p95LatencyMs, 0)} | ${times(ratios.p95Latency)} |`,
     `| cost per task (USD) | ${num(stats.baseline.costPerTaskUsd, 4)} | ${num(stats.candidate.costPerTaskUsd, 4)} | ${times(ratios.cost)} |`,
     `| tool calls per task | ${num(stats.baseline.toolCallsPerTask)} | ${num(stats.candidate.toolCallsPerTask)} | ${times(ratios.toolCalls)} |`,
+    `| internal tool calls per task | ${num(stats.baseline.internalToolCallsPerTask)} | ${num(stats.candidate.internalToolCallsPerTask)} | ${times(ratios.internalToolCalls)} |`,
     `| protocol violations | ${stats.baseline.protocolViolations} | ${stats.candidate.protocolViolations} | |`,
     '',
     '## Error kinds',
