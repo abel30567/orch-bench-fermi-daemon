@@ -62,6 +62,94 @@ describe('MCP proxy stream failures', () => {
     assert.match(r.stdout, /survived/)
   })
 
+  // The worker answers GET /mcp late, and the client or the teardown gets there first.
+  for (const mode of ['disconnect', 'close']) {
+    test(`the crash, before upstream headers arrive (${mode}): a later upstream cut does not kill the process`, () => {
+      const script = `
+        import http from 'node:http'
+        import { startMcpProxy } from './evals/lib/mcp-proxy.mjs'
+        import { serve, sleep } from './evals/lib/net.mjs'
+        const up = await serve(async (req, res) => {
+          await sleep(100)
+          res.writeHead(200, { 'content-type': 'text/event-stream' })
+          res.write('data: hello\\n\\n')
+        })
+        const proxy = await startMcpProxy({ target: up.url })
+        const req = http.get(proxy.url + '/mcp')
+        req.on('error', () => {})
+        await sleep(20)
+        if ('${mode}' === 'disconnect') req.destroy()
+        else await proxy.close()
+        await sleep(200)
+        await up.close()
+        await sleep(200)
+        await proxy.close()
+        console.log('survived')
+      `
+      const r = spawnSync(process.execPath, ['--input-type=module', '-e', script], { cwd: ROOT, encoding: 'utf8', timeout: 20_000 })
+      assert.equal(r.status, 0, r.stderr)
+      assert.match(r.stdout, /survived/)
+    })
+  }
+
+  test('a client gone before upstream headers releases the upstream connection and records one note', async () => {
+    let upstreamClosed = false
+    const up = await serve(async (req, res) => {
+      res.once('close', () => (upstreamClosed = true))
+      await sleep(60)
+      res.writeHead(200, { 'content-type': 'text/event-stream' })
+      res.write('data: hello\n\n')
+    })
+    const notes = []
+    const proxy = await startMcpProxy({ target: up.url, onNote: (n) => notes.push(n) })
+    const req = http.get(`${proxy.url}/mcp`)
+    req.on('error', () => {})
+    await sleep(20)
+    req.destroy()
+    await until(() => upstreamClosed && notes.length > 0)
+    await sleep(30)
+    assert.equal(notes.length, 1, JSON.stringify(notes))
+    await proxy.close()
+    await up.close()
+  })
+
+  test('close() during a pending fetch waits for it, its note lands first, an unanswering upstream cannot hang it', async () => {
+    let answer
+    const up = await serve((req, res) => void (answer = res))
+    const notes = []
+    const proxy = await startMcpProxy({ target: up.url, onNote: (n) => notes.push(n) })
+    const req = http.get(`${proxy.url}/mcp`)
+    req.on('error', () => {})
+    await until(() => answer)
+    await proxy.close()
+    assert.equal(notes.length, 1, JSON.stringify(notes))
+    await sleep(30)
+    assert.equal(notes.length, 1, JSON.stringify(notes))
+    await up.close()
+  })
+
+  test('close() does not wait out a fault latency and sends nothing upstream after it', async () => {
+    let upstreamCalls = 0
+    const up = await serve((req, res) => {
+      upstreamCalls++
+      res.end()
+    })
+    const notes = []
+    const proxy = await startMcpProxy({ target: up.url, faults: { slow_tool: { latencyMs: 300 } }, onNote: (n) => notes.push(n) })
+    const req = http.request(`${proxy.url}/mcp`, { method: 'POST' })
+    req.on('error', () => {})
+    req.end(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'slow_tool' } }))
+    await sleep(50)
+    const t0 = Date.now()
+    await proxy.close()
+    assert.ok(Date.now() - t0 < 200, 'close() waited out the latency')
+    assert.equal(notes.length, 1, JSON.stringify(notes))
+    await sleep(300)
+    assert.equal(upstreamCalls, 0)
+    assert.equal(notes.length, 1, JSON.stringify(notes))
+    await up.close()
+  })
+
   test('an upstream cut mid-stream destroys the client and records one note', async () => {
     const up = await sseUpstream((res) => void setTimeout(() => res.destroy(), 10))
     const notes = []
