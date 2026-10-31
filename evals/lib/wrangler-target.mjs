@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { freePort, sleep } from './net.mjs'
+import { seedFixture as scenarioFixture } from './scenario.mjs'
 
 const run = promisify(execFile)
 
@@ -15,6 +16,15 @@ export function workerDir(checkout) {
   for (const d of [join(checkout, 'packages/worker'), checkout])
     if (existsSync(join(d, 'wrangler.eval.jsonc'))) return d
   throw new Error(`no wrangler.eval.jsonc under ${checkout} (need a fermi-mcp checkout with MCP-11)`)
+}
+
+// The scenario's fixture in the worker's shape: MCP-24's eval-seed.mjs takes the
+// inbound chat's transcript as `conversation` and writes it through the real
+// conversation store.
+export function seedFixture(fixtures = {}, inbound = null) {
+  const { history, ...fixture } = scenarioFixture(fixtures, inbound)
+  if (!history) return fixture
+  return { ...fixture, conversation: { channel: inbound.channel, chat_id: inbound.chat, sender: inbound.sender, history: fixtures.history } }
 }
 
 export async function startWranglerTarget({ worker, env, logDir, bootTimeoutMs = 90_000 }) {
@@ -53,8 +63,6 @@ export async function startWranglerTarget({ worker, env, logDir, bootTimeoutMs =
   return {
     url,
     async seed(fixture) {
-      // eval-seed.mjs has no conversation section yet; failing beats grading without the history.
-      if (fixture.history) throw new Error('fixtures.history is not supported by the eval worker seed (eval-seed.mjs) yet')
       const file = join(state, 'fixture.json')
       writeFileSync(file, JSON.stringify(fixture))
       await run(process.execPath, ['scripts/eval-seed.mjs', file, '--persist-to', state, '--url', url], { cwd })
