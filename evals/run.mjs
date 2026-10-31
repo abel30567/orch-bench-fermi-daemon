@@ -8,7 +8,7 @@
 // Scenarios with `"schedule": "weekly"` (the soak) are skipped unless --weekly is given.
 // Exit 0 when every attempt's outcome is the expected one, 1 otherwise, 2 on a
 // usage error or a non-localhost URL.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { loadHarness } from '../harness/index.mjs'
 import { internalToolCalls } from './lib/assertions.mjs'
@@ -57,11 +57,14 @@ function withFakeScript(s, key) {
   return { ...s, fake: { ...s.fake, script: s.fake[key] }, expectOutcome: 'fail' }
 }
 
-// The harness's own calls in one attempt, from its trace.jsonl (none if it never got that far).
-function attemptInternalCalls(out, { scenario, attempt }) {
-  const file = join(out, scenario, String(attempt), 'trace.jsonl')
+const traceSize = (file) => (existsSync(file) ? statSync(file).size : 0)
+
+// The harness's own calls in one attempt: the runner appends to trace.jsonl, so an
+// --out used before holds earlier runs, and this attempt starts at byte `from`.
+function attemptInternalCalls(file, from) {
   if (!existsSync(file)) return []
-  return internalToolCalls(readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)))
+  const lines = readFileSync(file).subarray(from).toString('utf8').trim().split('\n').filter(Boolean)
+  return internalToolCalls(lines.map((l) => JSON.parse(l)))
 }
 
 async function main() {
@@ -109,8 +112,10 @@ async function main() {
   const results = []
   for (const scenario of scenarios)
     for (let attempt = 1; attempt <= opts.k; attempt++) {
+      const trace = join(out, scenario.name, String(attempt), 'trace.jsonl')
+      const from = traceSize(trace)
       const r = await runAttempt({ scenario, attempt, harness, model: opts.model, worker: opts.worker, timeoutMs: opts.timeoutMs, outDir: out })
-      r.internalToolCalls = attemptInternalCalls(out, r)
+      r.internalToolCalls = attemptInternalCalls(trace, from)
       results.push(r)
       const tag = r.pass ? 'PASS' : r.expectedOutcome === 'fail' ? 'FAIL (expected)' : 'FAIL'
       console.log(`${tag} ${r.scenario} #${attempt} ${r.latencyMs}ms ${r.failed.map((f) => f.message).join(' | ')}`.trimEnd())

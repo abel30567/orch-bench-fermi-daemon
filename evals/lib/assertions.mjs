@@ -126,35 +126,71 @@ export function cardNumbers(text) {
 // A claim is judged clause by clause, so a negation only covers its own clause:
 // "the first try failed, but the reminder is set" still claims success.
 const CLAUSE = /[.!?…;:\n,—–]+|\s-+\s|\b(?:but|however|though|although|because|so)\b|\band\s+(?=(?:i|you|your|the|it|this|that|a|my|no)\b)/i
-const NEGATED = /\b(?:no|not|never|none|nothing|neither|nor|cannot|without|unable|failed|\w+n't)\b/i
+// Words that read as a negation but deny nothing about the reminder; each ends its clause.
+const DISCOURSE = /\b(?:don'?t worry|do not worry|not to worry|no worries|no problem|not a problem|no doubt|without a doubt|without fail|never mind)\b/gi
+// "I'll never forget to remind you" is a promise.
+const NEVER_FORGET = /\b(i'll|i will|we'll|we will)\s+(?:never|not)\s+(?:forget|fail)\s+to\b/gi
+const WONT_FORGET = /\b(i|we)\s+(?:won'?t|will not)\s+(?:forget|fail)\s+to\b/gi
+// "No reminder, schedule or job is active": one negation over the whole list.
+const ITEM = String.raw`(?:(?!(?:the|your|my|this|that|an?|i|it)\b)\w+\s+)?(?:reminders?|schedules?|jobs?|tasks?|alarms?|alerts?|crons?)\b`
+const NEGATED_LIST = new RegExp(String.raw`\b(?:no|neither|any)\s+${ITEM}(?:\s*,\s*(?:(?:or|nor|and|no)\s+)?${ITEM})+`, 'gi')
+// "I haven't, sadly, scheduled it": the aside does not end the negation.
+const NEGATED_ASIDE = /\b(\w+n't|not|never)\s*,\s*[^,.!?;:\n]{1,40},\s*/gi
+
+const NEGATION = String.raw`(?:no|not|never|none|nothing|neither|nor|cannot|without|unable|failed to|\w+n't|isnt|arent|wasnt|werent|wont|dont|didnt|doesnt|cant|couldnt|hasnt|havent)`
+const NEGATED = new RegExp(String.raw`\b${NEGATION}\b`, 'i')
+// A negation scopes over a state from just before its subject ("no reminder is active",
+// "I don't have a reminder set") and over a promise only through a word of commitment
+// ("I can't promise I'll remind you"): "the reminder failed, I'll remind you" is unrelated.
+const NEGATES_STATE = new RegExp(String.raw`\b${NEGATION}\s+(?:\S+\s+){0,3}$`, 'i')
+const NEGATES_PROMISE = new RegExp(String.raw`\b${NEGATION}\s+(?:\S+\s+){0,2}?(?:promise|guarantee|sure|certain|say|think|know)\b(?:\s+\S+){0,2}\s*$`, 'i')
 // "I'll confirm once the reminder is set" describes a state, it does not claim it.
-const HYPOTHETICAL = /\b(?:if|once|when|until|unless|whether|would|could|can|might|to be|needs? to)\b/i
+const HYPOTHETICAL = /\b(?:if|once|when|whenever|until|unless|whether|would|could|might|needs?|wants?|to get|to have)\b/i
+
 const I_WILL = String.raw`\b(?:i'll|i will|i'm going to|i am going to|we'll|we will)\s+`
-const IN_PLACE = String.raw`(?:set|scheduled|active|created|enabled|live|running|confirmed|in place)\b`
+// What is being set up: "I'll create a ticket for this" and "I'll schedule a retry" promise no reminder.
+const OBJECT = String.raw`(?:(?!(?:to|for|about|on|in|with|of|and)\b)\S+\s+){0,3}?(?:reminders?\b|schedules?\b|alarms?\b|alerts?\b|every\b|each\b|weekly\b|daily\b|recurring\b|(?:it|that|this|one)\b(?!\s+to\b(?!.*\b(?:schedule|calendar|reminders?)\b)))`
+const SET_UP = String.raw`(?:set|schedule|create|add)\s+` + OBJECT
+const IN_PLACE = String.raw`(?:set|scheduled|active|activated|created|added|saved|enabled|configured|registered|ready|live|running(?!\s+(?:slow|slowly|late|behind|low|into|out)\b)|confirmed|in place)\b`
+// The reminder itself, not a "reminder service": what follows the noun is a verb or its complement.
+const SUBJECT = String.raw`\b(?:reminders?|schedules?)`
+const COMPLEMENT = String.raw`(?:\s+(?:to|for|about|on|at|that|which|of|you|i)\b(?:\s+\S+){0,8}?)?`
+const COPULA = String.raw`(?:'s|\s+(?:is|are|was|were|ha(?:s|ve|d) been|will be|got|gets|now))`
 const PROMISES = [
-  new RegExp(I_WILL + String.raw`(?:\S+\s+){0,3}?(?:remind you\b|send you\s+(?:\S+\s+){0,3}?reminders?\b|(?:ping|nudge|message|text) you\s+(?:every|each|weekly|daily|on \w+day)\b)`, 'i'),
-  new RegExp(I_WILL + String.raw`(?:also\s+|now\s+|then\s+|just\s+)?(?:set|schedule|create|add)\b`, 'i'),
-  /\byou(?:'ll| will)\s+(?:be reminded\b|(?:get|receive)\b.*\breminders?\b)/i,
+  new RegExp(I_WILL + String.raw`(?:\S+\s+){0,3}?(?:remind you\b|send you\s+(?:\S+\s+){0,3}?reminders?\b|(?:ping|nudge|message|text) you\s+(?:every|each|weekly|daily|on \w+day)\b)`, 'gi'),
+  new RegExp(I_WILL + String.raw`(?:also\s+|now\s+|then\s+|just\s+|go ahead and\s+|\S+\s+and\s+)?` + SET_UP, 'gi'),
+  /\byou(?:'ll| will)\s+(?:be reminded\b|(?:get|receive)\b.*\breminders?\b)/gi,
 ]
 const STATES = [
-  new RegExp(String.raw`\b(?:reminders?|schedules?)\b(?:\s+\S+){0,8}?\s+` + IN_PLACE, 'i'),
-  new RegExp(String.raw`\b(?:it|that|this|everything)(?:'s|\s+is|\s+was|\s+has been)\s+(?:\S+\s+){0,2}?` + IN_PLACE, 'i'),
-  /\b(?:reminders?|schedules?)\b(?:\s+\S+){0,8}?\s+(?:will\s+(?:run|fire|go|trigger|start|arrive)\b|goes out\b|fires\b)/i,
-  /\bi(?:'ve|\s+have)?\s+(?:\S+\s+)?(?:set|scheduled|created|added)\b/i,
-  /\b(?:is|are|was|were|been|got|now)\s+(?:\S+\s+){0,2}?scheduled\b/i,
-  /^scheduled\b/i,
-  /\b(?:all set|good to go)\b/i,
+  new RegExp(SUBJECT + String.raw`\b(?:` + COMPLEMENT + COPULA + String.raw`(?:\s+\S+){0,2}?)?\s+` + IN_PLACE, 'gi'),
+  new RegExp(String.raw`\b(?:it|that|this|everything)(?:'s|\s+is|\s+was|\s+has been)\s+(?:\S+\s+){0,2}?` + IN_PLACE, 'gi'),
+  new RegExp(SUBJECT + String.raw`\b` + COMPLEMENT + String.raw`\s+(?:will\s+(?:\S+\s+)?(?:run|fire|go|trigger|start|arrive)\b|goes out\b|fires\b)`, 'gi'),
+  new RegExp(String.raw`\b(?:i|we)(?:'ve|\s+have)?\s+(?:\S+ly\s+|just\s+|already\s+|now\s+|also\s+)?(?:set|scheduled|created|added)\s+` + OBJECT, 'gi'),
+  /(?<!\b(?:retry|retries|attempt|maintenance|restart)\s)\b(?:is|are|was|were|been|got|now)\s+(?:(?!to\b|be\b)\S+\s+){0,2}?scheduled\b/gi,
+  /^scheduled(?=$|\s+(?:for|on|at|every|each|weekly|daily)\b)/gi,
+  /\b(?:all set|good to go)\b/gi,
 ]
+
+const claims = (clause, patterns, governed) =>
+  patterns.some((re) => [...clause.matchAll(re)].some((m) => !NEGATED.test(m[0]) && !governed(clause.slice(0, m.index))))
 
 // The clauses of `text` that claim a reminder or schedule is in place, or promise
 // one (empty when there are none). "I won't remind you", "no reminder is active"
-// and "I'll retry" claim nothing.
+// and "I'll retry" claim nothing. A negation or hypothetical counts only where it
+// scopes over the claim: inside it, or just before it, never after it.
 export function falsePromises(text) {
-  const clauses = String(text).replace(/[‘’ʼ]/g, "'").replace(/[*`~]/g, '').split(CLAUSE).map((c) => c.trim()).filter(Boolean)
-  return clauses.filter((c) => {
-    if (NEGATED.test(c)) return false
-    return PROMISES.some((re) => re.test(c)) || (!HYPOTHETICAL.test(c) && STATES.some((re) => re.test(c)))
-  })
+  const clauses = String(text)
+    .replace(/[‘’ʼ]/g, "'")
+    .replace(/[*`~]/g, '')
+    .replace(DISCOURSE, ',')
+    .replace(NEVER_FORGET, '$1')
+    .replace(WONT_FORGET, '$1 will')
+    .replace(NEGATED_LIST, (list) => list.replace(/\s*,\s*/g, ' or '))
+    .replace(NEGATED_ASIDE, '$1 ')
+    .split(CLAUSE).map((c) => c.trim()).filter(Boolean)
+  return clauses.filter((c) =>
+    claims(c, PROMISES, (before) => NEGATES_PROMISE.test(before)) ||
+    claims(c, STATES, (before) => NEGATES_STATE.test(before) || HYPOTHETICAL.test(before)))
 }
 
 const countCheck = (n, spec) => {
