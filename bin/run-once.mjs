@@ -66,6 +66,14 @@ const run = harness.runOnce({
 })
 note(`harness pid ${run.pid}`)
 
+// A harness binary that cannot be spawned (CLAUDE_BIN missing, not executable):
+// poll.sh discards our stdout/stderr, so the reason goes to the run log.
+let spawnError = null
+run.events.on('error', (e) => {
+  spawnError = e
+  note(`spawn error: ${e.message}`)
+})
+
 let sessionId = null
 run.events.on('raw', (line) => {
   out.write(line + '\n')
@@ -100,5 +108,5 @@ const { code } = await run.done
 clearTimeout(watchdog)
 clearTimeout(killTimer)
 if (o.session && sessionId && !timedOut) writeFileSync(o.session, sessionId + '\n')
-note(`exit ${timedOut ? 'watchdog' : code}`)
-out.end(() => process.exit(timedOut ? 124 : (code ?? 1)))
+note(`exit ${timedOut ? 'watchdog' : spawnError ? 'spawn error' : code}`)
+out.end(() => process.exit(timedOut ? 124 : spawnError ? 127 : (code ?? 1)))
