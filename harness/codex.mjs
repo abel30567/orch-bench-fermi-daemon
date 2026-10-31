@@ -143,6 +143,8 @@ function spawnCodex(args, o) {
 // Emit each stdout line as 'raw' and its JSON to onJson; stderr and exit as-is.
 // Split on LF only: records may hold U+2028/U+2029, which readline splits on.
 function pipe(child, events, onJson) {
+  // codex may exit before reading its prompt: its stdin then fails with EPIPE.
+  for (const s of [child.stdin, child.stdout, child.stderr]) s.on('error', () => {})
   let buf = ''
   child.stdout.on('data', (d) => {
     buf += d.toString()
