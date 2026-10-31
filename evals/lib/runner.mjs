@@ -69,7 +69,13 @@ export async function runAttempt({ scenario, attempt, harness, model, worker, ti
     assertLocalUrls({ target: target.url })
     await target.seed(seedFixture(scenario.fixtures, scenario.inbound))
     await seedSecrets(target.url, scenario.fixtures?.secrets)
-    const proxy = await startMcpProxy({ target: target.url, faults: scenario.faults })
+    // A cut upstream stream (e.g. the SSE GET /mcp when the worker shuts down) is a non-fatal trace note.
+    const onError = (err) => {
+      const ev = { type: 'note', source: 'mcp-proxy', detail: String(err?.message ?? err) }
+      trace.push(ev)
+      appendFileSync(join(dir, 'trace.jsonl'), JSON.stringify(ev) + '\n')
+    }
+    const proxy = await startMcpProxy({ target: target.url, faults: scenario.faults, onError })
     closers.push(proxy.close)
     const mcpConfig = { mcpServers: { fermi: { type: 'http', url: `${proxy.url}/mcp` } } }
     assertLocalUrls(Object.fromEntries(Object.entries(mcpConfig.mcpServers).map(([k, s]) => [`mcp:${k}`, s.url])))

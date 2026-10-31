@@ -2,12 +2,20 @@
 // /mcp that injects a scenario's faults. `faults` maps a bare tool name to
 // { error?: string, latencyMs?: number }: latency delays the call, error answers
 // it with an isError result without reaching the target.
-import { Readable } from 'node:stream'
+// Upstream streams (the long-lived SSE GET /mcp) can be cut at any time, by the
+// target shutting down or the client going away: both sides are destroyed and the
+// error goes to `onError(err)` instead of escaping as an unhandled 'error' event.
+import { Readable, pipeline } from 'node:stream'
 import { readBody, sendJson, serve, sleep } from './net.mjs'
 
 const HOP = new Set(['host', 'connection', 'content-length', 'transfer-encoding', 'keep-alive'])
 
-export async function startMcpProxy({ target, faults = {} }) {
+export async function startMcpProxy({ target, faults = {}, onError = () => {} }) {
+  const report = (err) => {
+    try {
+      onError(err)
+    } catch {}
+  }
   return serve(async (req, res) => {
     const body = req.method === 'POST' ? await readBody(req) : undefined
     let msg = null
@@ -24,7 +32,14 @@ export async function startMcpProxy({ target, faults = {} }) {
     const out = {}
     up.headers.forEach((v, k) => !HOP.has(k) && k !== 'content-encoding' && (out[k] = v))
     res.writeHead(up.status, out)
-    if (up.body) Readable.fromWeb(up.body).pipe(res)
-    else res.end()
+    if (!up.body) return res.end()
+    const upstream = Readable.fromWeb(up.body)
+    // Late errors (after pipeline settles) are already reported; keep them from escaping.
+    upstream.on('error', () => {})
+    res.on('error', () => {})
+    // pipeline destroys both sides on any error, including a client disconnect.
+    pipeline(upstream, res, (err) => {
+      if (err) report(err)
+    })
   })
 }
