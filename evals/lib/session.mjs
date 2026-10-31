@@ -7,9 +7,12 @@
 //
 // turn: drain | stop | teams | keepalive (texts below). interruptAfter: call the
 // session's interrupt() as soon as the turn calls that tool, as the control
-// endpoint's POST /abort does. That turn's turn_end is marked `interrupted: true`
-// so the runner does not count it as a harness failure.
+// endpoint's POST /abort does; `{ "firstCallAfter": "task_claim" }` interrupts on
+// the turn's first Fermi call after that tool instead, whichever tool the model picks.
+// That turn's turn_end is marked `interrupted: true` so the runner does not count
+// it as a harness failure.
 import { EventEmitter } from 'node:events'
+import { isFermiCall } from './assertions.mjs'
 
 // The turn texts warm-worker.mjs sends (test/evals-control.test.mjs keeps them in sync).
 export const TURNS = {
@@ -30,9 +33,23 @@ export const TURNS = {
 
 const died = (detail) => ({ type: 'turn_end', ok: false, kind: 'unknown_error', detail, durationMs: 0, raw: null })
 
+// interruptAfter → a predicate over one turn's tool_call events: true when the turn must stop.
+function interruptTrigger(spec) {
+  if (typeof spec === 'string') return (ev) => ev.name === spec
+  if (!spec?.firstCallAfter) return () => false
+  let armed = false
+  return (ev) => {
+    if (!isFermiCall(ev)) return false // ToolSearch & co. are the harness's, not the task's
+    if (armed) return true
+    if (ev.name === spec.firstCallAfter) armed = true
+    return false
+  }
+}
+
 // One turn: send `text`, forward its events, interrupt on `interruptAfter`; resolves with its turn_end.
 function runTurn(session, text, interruptAfter, emit) {
   return new Promise((resolve) => {
+    const trigger = interruptTrigger(interruptAfter)
     let interrupted = false
     const onEvent = (ev) => {
       if (ev.type === 'turn_end') {
@@ -42,7 +59,7 @@ function runTurn(session, text, interruptAfter, emit) {
         return resolve(end)
       }
       emit(ev)
-      if (interruptAfter && !interrupted && ev.type === 'tool_call' && ev.name === interruptAfter) {
+      if (!interrupted && ev.type === 'tool_call' && trigger(ev)) {
         interrupted = true
         session.interrupt()
       }
