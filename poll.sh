@@ -88,6 +88,8 @@ require_node() {
 	NODE="${NODE:-node}"
 	local version
 	version=$("$NODE" --version 2>/dev/null)
+	# The version is the last line: a version-manager shim may print a preamble.
+	version="${version##*$'\n'}"
 	version="${version#v}"
 	local major="${version%%.*}"
 	if [[ "$major" != <22-> ]]; then

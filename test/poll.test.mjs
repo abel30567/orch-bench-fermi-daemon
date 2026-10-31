@@ -22,6 +22,9 @@ const script = (path, body) => {
 // Reports `version`, logs every other call, and hands it to the real node.
 const fakeNode = (path, version, calls) =>
   script(path, `[ "$1" = --version ] && { echo v${version}; exit 0; }\necho "$0 $*" >>"${calls}"\nexec "${process.execPath}" "$@"`)
+// The same, with the line a version-manager shim prints before the version.
+const shimNode = (path, version, calls) =>
+  script(path, `[ "$1" = --version ] && { echo 'Now using node'; echo v${version}; exit 0; }\necho "$0 $*" >>"${calls}"\nexec "${process.execPath}" "$@"`)
 
 const until = async (cond, ms = 5000) => {
   for (const t0 = Date.now(); !cond(); ) {
@@ -97,6 +100,12 @@ describe('AC1: a node that is too old or missing is refused loudly, with no spaw
     assertRefused(d, poll(d), errorLine('/nonexistent/node', 'unknown', 'drain.md'))
   })
 
+  test('a shim preamble before a too-old version: still one error line', () => {
+    const d = daemon()
+    const node = shimNode(join(d.bin, 'node'), '14.21.3', d.calls)
+    assertRefused(d, poll(d), errorLine(node, '14.21.3', 'drain.md'))
+  })
+
   test('nothing to do: no node check and a clean exit', () => {
     const d = daemon({ pending: 0 })
     writeFileSync(join(d.dir, 'last-heartbeat'), '')
@@ -143,6 +152,17 @@ describe('AC2: NODE_BIN is honoured', () => {
     assert.equal(poll(d).status, 0)
     await until(() => existsSync(d.calls))
     assert.ok(readFileSync(d.calls, 'utf8').startsWith(`${node} `))
+  })
+
+  test('a shim preamble before a good version does not refuse a usable node', async () => {
+    const d = daemon()
+    const node = shimNode(join(d.bin, 'node'), '22.1.0', d.calls)
+    stubRun(d)
+    const r = poll(d)
+    assert.equal(r.status, 0, r.stderr)
+    await until(() => existsSync(d.calls))
+    assert.ok(readFileSync(d.calls, 'utf8').startsWith(`${node} `))
+    assert.doesNotMatch(pollLog(d), /ERROR/)
   })
 
   test('.env.example documents it, empty once sourced', () => {
