@@ -177,6 +177,17 @@ describe('AC2: NODE_BIN is honoured', () => {
     assert.doesNotMatch(pollLog(d), /ERROR/)
   })
 
+  test('a preamble starting with v is not taken for the version', async () => {
+    const d = daemon()
+    const node = printingNode(join(d.bin, 'node'), ['verifying shim', 'v22.1.0'], d.calls)
+    stubRun(d)
+    const r = poll(d)
+    assert.equal(r.status, 0, r.stderr)
+    await until(() => existsSync(d.calls))
+    assert.ok(readFileSync(d.calls, 'utf8').startsWith(`${node} `))
+    assert.doesNotMatch(pollLog(d), /ERROR/)
+  })
+
   test('text after a good version does not refuse a usable node', async () => {
     const d = daemon()
     const node = printingNode(join(d.bin, 'node'), ['v22.1.0', 'done'], d.calls)
