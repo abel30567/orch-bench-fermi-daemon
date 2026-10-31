@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { freePort, sleep } from './net.mjs'
+import { seedFixture as baseSeedFixture } from './scenario.mjs'
 
 const run = promisify(execFile)
 
@@ -15,6 +16,25 @@ export function workerDir(checkout) {
   for (const d of [join(checkout, 'packages/worker'), checkout])
     if (existsSync(join(d, 'wrangler.eval.jsonc'))) return d
   throw new Error(`no wrangler.eval.jsonc under ${checkout} (need a fermi-mcp checkout with MCP-11)`)
+}
+
+// The eval-seed.mjs fixture for a scenario: MCP-24 takes the inbound chat's prior
+// transcript as `conversation: { channel, chat_id, sender, history }`, with
+// history entries { role, text, minutes_ago? } written through the real
+// conversation store. `sender` is the inbound sender (the group sender in a group chat).
+export function seedFixture(fixtures = {}, inbound = null) {
+  const { history: _, ...seed } = baseSeedFixture(fixtures, inbound)
+  const history = fixtures?.history ?? []
+  if (!history.length) return seed
+  return {
+    ...seed,
+    conversation: {
+      channel: inbound?.channel,
+      chat_id: inbound?.chat,
+      ...(inbound?.sender != null && { sender: inbound.sender }),
+      history: history.map(({ role, text, minutes_ago }) => ({ role, text, ...(minutes_ago != null && { minutes_ago }) })),
+    },
+  }
 }
 
 export async function startWranglerTarget({ worker, env, logDir, bootTimeoutMs = 90_000 }) {
@@ -53,8 +73,6 @@ export async function startWranglerTarget({ worker, env, logDir, bootTimeoutMs =
   return {
     url,
     async seed(fixture) {
-      // eval-seed.mjs has no conversation section yet; failing beats grading without the history.
-      if (fixture.history) throw new Error('fixtures.history is not supported by the eval worker seed (eval-seed.mjs) yet')
       const file = join(state, 'fixture.json')
       writeFileSync(file, JSON.stringify(fixture))
       await run(process.execPath, ['scripts/eval-seed.mjs', file, '--persist-to', state, '--url', url], { cwd })
