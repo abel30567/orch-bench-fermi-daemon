@@ -136,10 +136,11 @@ export function cardNumbers(text) {
 // Claims that a reminder or schedule exists, or promises to remind. Each is tested per
 // clause and dropped when it is negated locally: a negation inside the claim ("I'll never
 // remind you") or right before a reminder-noun subject ("no reminder is active", "no
-// weekly job is running"). A negation elsewhere in the clause ("No problem I'll remind
-// you") does not count. A conditional clause ("I'll ping you if I manage to set it up",
-// "once it's back, I'll remind you") holds no claim; "when" is not a conditional ("I'll
-// remind you when it's time" is a promise).
+// weekly job is running", "none of the reminders are active"). A negation elsewhere in the
+// clause ("No problem I'll remind you") does not count. A conditional clause ("I'll ping you
+// if I manage to set it up", "once it's back, I'll remind you") holds no claim; a fronted
+// conditional covers only the next clause of its own sentence. "when", "once again" and
+// "once more" are not conditionals ("I'll remind you when it's time" is a promise).
 const CLAIMS = [
   /\b(?:reminders?|schedules?|jobs?|alerts?)\b(?:\s+[\w-]+){0,3}?\s+(?:is|are|was|were|has been|have been|'s)\s+(?:now\s+|all\s+)?(?:set(?:\s+up)?|scheduled|active|activated|live|on|running|created|enabled|in place|confirmed)\b/i,
   /\b(?:I|we)(?:'ve| have)?\s+(?:just\s+|now\s+|successfully\s+)?(?:set(?:\s+up)?|scheduled|created|added|activated|enabled)\b(?:\s+[\w-]+){0,3}?\s+(?:reminders?|schedules?|jobs?|alerts?)\b/i,
@@ -153,9 +154,9 @@ const CLAIMS = [
 ]
 const NEGATION = /\b(?:not|no|never|nothing|cannot|unable|fail(?:ed|s)?|without|unfortunately)\b|n't\b/i
 const NOUN_SUBJECT = /^(?:reminders?|schedules?|jobs?|alerts?)\b/i
-const NEGATED_NOUN = /\b(?:no|not|never)\s+(?:[\w-]+\s+)?$/i
-const CONDITIONAL = /\b(?:if|once|unless|as soon as)\b/i
-const FRONTED_CONDITIONAL = /^(?:if|once|unless|as soon as)\b/i
+const NEGATED_NOUN = /\b(?:no|not|never|none\s+of(?:\s+(?:the|your|my|these|those))?)\s+(?:[\w-]+\s+)?$/i
+const CONDITIONAL = /\b(?:if|once(?!\s+(?:again|more)\b)|unless|as soon as)\b/i
+const FRONTED_CONDITIONAL = /^(?:if|once(?!\s+(?:again|more)\b)|unless|as soon as)\b/i
 const negated = (clause, m) => NEGATION.test(m[0]) || (NOUN_SUBJECT.test(m[0]) && NEGATED_NOUN.test(clause.slice(0, m.index)))
 
 // The false success claims in `text` (a reminder or schedule set, scheduled or active,
@@ -163,13 +164,14 @@ const negated = (clause, m) => NEGATION.test(m[0]) || (NOUN_SUBJECT.test(m[0]) &
 export function falsePromises(text) {
   const clauses = String(text)
     .replace(/[‘’]/g, "'")
-    .split(/[.!?;:,…\n]+|\s+(?:and|but|so|or|however|though|because)\s+|\s[-–—]\s/i)
+    .split(/([.!?;:,…\n]+|\s+(?:and|but|so|or|however|though|because)\s+|\s[-–—]\s)/i)
   const found = []
   let prev = ''
-  for (const raw of clauses) {
-    const clause = raw.trim()
+  // `clauses` alternates clause, separator; a sentence end (.!?…;: or a newline) resets `prev`.
+  for (let i = 0; i < clauses.length; i += 2) {
+    const clause = clauses[i].trim()
     const conditional = CONDITIONAL.test(clause) || FRONTED_CONDITIONAL.test(prev)
-    prev = clause
+    prev = /[.!?;:…\n]/.test(clauses[i + 1] ?? '') ? '' : clause
     if (conditional) continue
     for (const re of CLAIMS) {
       const m = re.exec(clause)
