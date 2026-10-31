@@ -1,0 +1,106 @@
+import { spawn } from 'node:child_process'
+import { join } from 'node:path'
+import type { Config } from './config.ts'
+import { log } from './log.ts'
+
+export const RETRY_DELAYS_MS = [1000, 3000, 9000]
+
+export type SlackMessageEvent = {
+	type?: string
+	subtype?: string
+	bot_id?: string
+	user?: string
+	channel?: string
+	channel_type?: string
+	team?: string
+	text?: string
+	hidden?: boolean
+	ts?: string
+	client_msg_id?: string
+}
+
+export type Inbound = {
+	author_id: string
+	display_name: string
+	channel_id: string
+	team_id: string | null
+	is_im: boolean
+	text: string
+	// Stable per Slack message so the worker can dedupe retried deliveries.
+	message_id?: string
+}
+
+export type ForwardDeps = {
+	fetch: typeof fetch
+	sleep: (ms: number) => Promise<void>
+	poke: (config: Config) => void
+}
+
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function pokeDaemon(config: Config): void {
+	try {
+		const pollScript = join(config.DAEMON_HOME, 'poll.sh')
+		spawn(pollScript, [], { detached: true, stdio: 'ignore' }).unref()
+	} catch (err) {
+		log(`warn: failed to spawn poll.sh: ${String(err)}`)
+	}
+}
+
+function isIm(event: SlackMessageEvent): boolean {
+	if (event.channel_type === 'im') return true
+	return typeof event.channel === 'string' && event.channel.startsWith('D')
+}
+
+/** Build the /sl/webhook body. Caller has already checked user, channel and text. */
+export function buildInbound(
+	event: SlackMessageEvent & { user: string; channel: string; text: string },
+	displayName: string,
+	teamId: string | null,
+): Inbound {
+	return {
+		author_id: event.user,
+		display_name: displayName,
+		channel_id: event.channel,
+		team_id: teamId,
+		is_im: isIm(event),
+		text: event.text,
+		message_id: event.client_msg_id || event.ts || undefined,
+	}
+}
+
+export async function forwardToWorker(
+	config: Config,
+	msg: Inbound,
+	deps: ForwardDeps = { fetch, sleep, poke: pokeDaemon },
+): Promise<void> {
+	const url = `${config.FERMI_URL}/sl/webhook`
+	// Serialized once so every retry sends the identical body (same message_id).
+	const body = JSON.stringify(msg)
+	for (let attempt = 0; attempt < RETRY_DELAYS_MS.length + 1; attempt++) {
+		try {
+			const res = await deps.fetch(url, {
+				method: 'POST',
+				headers: {
+					'content-type': 'application/json',
+					'x-sl-bridge-secret': config.SLACK_BRIDGE_SECRET,
+				},
+				body,
+			})
+			if (res.ok) {
+				deps.poke(config)
+				return
+			}
+			log(`webhook non-2xx (attempt ${attempt + 1}): ${res.status}`)
+		} catch (err) {
+			log(`webhook network error (attempt ${attempt + 1}): ${String(err)}`)
+		}
+		const delay = RETRY_DELAYS_MS[attempt]
+		if (delay !== undefined) await deps.sleep(delay)
+	}
+	log(
+		`DROPPED inbound message from ${msg.author_id} (channel ${msg.channel_id}) after ${RETRY_DELAYS_MS.length + 1} attempts`,
+	)
+}
