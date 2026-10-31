@@ -11,7 +11,7 @@
     {"task.status": "failed"},
     {"argsMatch": {"tool": "task_complete", "args": {"status": "failed", "result": "/stopped by user/i"}}},
     {"argsMatch": {"tool": "channel_send", "args": {"chat_id": "D0EVAL", "text": "/🛑 Stopped/"}}},
-    {"notCalled": "mac_shell"},
+    {"notCalledAfterInterrupt": "mac_shell"},
     {"exactlyOnce": "task_complete"},
     {"notCalled": "task_list"},
     {"outbox.count": {"min": 1, "max": 2, "chat_id": "D0EVAL"}}
