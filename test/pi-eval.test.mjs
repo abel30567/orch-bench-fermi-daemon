@@ -93,6 +93,21 @@ describe('pi adapter eval mode', () => {
     assert.equal(readFileSync(join(realAgent(), 'auth.json'), 'utf8'), AUTH)
   })
 
+  test('an mcp.json symlink left in the sandbox is replaced, not written through', async () => {
+    const realMcp = join(realAgent(), 'mcp.json')
+    chmodSync(realMcp, 0o600) // writable, so a write through the link would land
+    try {
+      const o = attempt()
+      mkdirSync(join(o.sandboxHome, '.pi/agent'), { recursive: true })
+      symlinkSync(realMcp, join(o.sandboxHome, '.pi/agent/mcp.json'))
+      await runOnce(o).done
+      assert.deepEqual(JSON.parse(started(o.cwd).mcp), { mcpServers: { fermi: { url: LOCAL } } })
+      assert.deepEqual(JSON.parse(readFileSync(realMcp, 'utf8')), fermi(PRODUCTION))
+    } finally {
+      chmodSync(realMcp, 0o000)
+    }
+  })
+
   test('without mcpConfig the adapter keeps the ambient HOME and writes nothing', async () => {
     const cwd = tmp()
     const home = tmp()

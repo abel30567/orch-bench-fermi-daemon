@@ -94,7 +94,9 @@ function prepareSandbox({ mcpConfig, sandboxHome }) {
   if (['', '.pi', AGENT_DIR].some((sub) => sameDir(join(home, sub), join(homedir(), sub))))
     throw new Error('pi adapter: sandboxHome is the real HOME (see harness/pi.mjs)')
   mkdirSync(agentDir, { recursive: true, mode: 0o700 })
-  writeFileSync(join(agentDir, 'mcp.json'), JSON.stringify(config, null, 2) + '\n')
+  const mcp = join(agentDir, 'mcp.json')
+  rmSync(mcp, { force: true }) // a write would follow a symlink out of the sandbox
+  writeFileSync(mcp, JSON.stringify(config, null, 2) + '\n')
   const auth = join(agentDir, 'auth.json')
   const removeAuth = () => rmSync(auth, { force: true })
   removeAuth()
