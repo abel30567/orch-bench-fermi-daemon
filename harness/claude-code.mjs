@@ -116,6 +116,7 @@ function pipeEvents(child, events, since) {
   })
   child.stderr.on('data', (d) => events.emit('stderr', d.toString()))
   child.on('exit', (code) => events.emit('exit', code))
+  child.on('error', (err) => events.emit('error', err)) // spawn failure (missing bin, bad cwd)
 }
 
 export function startSession(o) {
