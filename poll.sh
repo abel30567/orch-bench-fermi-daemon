@@ -79,6 +79,22 @@ acquire_lane() {
 	return 1
 }
 
+# Resolve node for bin/run-once.mjs: NODE_BIN from .env, else PATH. The cold
+# path is the fallback for a down warm worker, so a missing or too-old node
+# must fail loudly (one poll.log line, non-zero exit) instead of spawning a run
+# that dies silently. Must run in the main shell (exit), not in $(...).
+NODE="${NODE_BIN:-$(command -v node 2>/dev/null)}"
+require_node() {
+	local ver major
+	ver=$("${NODE:-node}" -v 2>/dev/null)
+	ver="${ver#v}"
+	major="${ver%%.*}"
+	if [[ -z "$NODE" || "$major" != <-> ]] || (( major < 22 )); then
+		log "ERROR: node '${NODE:-node}' is v${ver:-unknown}; bin/run-once.mjs needs node >= 22 (set NODE_BIN in .env) — not spawning $1"
+		exit 1
+	fi
+}
+
 # Detached nohup spawn from the clean dir (EINTR-safe) of bin/run-once.mjs,
 # which runs the harness, enforces the MAX_RUN_SECONDS watchdog and removes the
 # lane on exit. Only heartbeat runs pass --session (resume from and store
@@ -86,6 +102,7 @@ acquire_lane() {
 spawn_run() {
 	local prompt_file="$1"
 	shift
+	require_node "$prompt_file"
 	local lane
 	lane=$(acquire_lane) || { log "all $MAX_CONCURRENT lanes busy — deferring $prompt_file"; return 1; }
 	local ts
@@ -95,14 +112,14 @@ spawn_run() {
 	if [[ "$prompt_file" == drain.md ]]; then
 		nohup python3 "$DAEMON_HOME/narrator.py" "runs/$ts.log" >/dev/null 2>&1 &
 	fi
-	nohup node "$DAEMON_HOME/bin/run-once.mjs" \
+	nohup "$NODE" "$DAEMON_HOME/bin/run-once.mjs" \
 		--prompt "prompts/$prompt_file" \
 		--log "runs/$ts.log" \
 		--lane "$lane" \
 		--model "$MODEL" \
 		--max-turns "$MAX_TURNS" \
 		--timeout-s "$MAX_RUN_SECONDS" \
-		"$@" >/dev/null 2>&1 &
+		"$@" >>"runs/$ts.log" 2>&1 &
 	echo $! >"$lane/pid"
 	log "spawned $prompt_file in lane ${lane:t} (pid $(cat "$lane/pid"), log runs/$ts.log)"
 }
