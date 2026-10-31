@@ -79,6 +79,21 @@ acquire_lane() {
 	return 1
 }
 
+# The cold path is the fallback for when the warm worker is down, so it must
+# not fail silently: node is $NODE_BIN (from .env), else `command -v node`, and
+# must be >= 22 — otherwise log one error line and exit non-zero, no spawn.
+require_node() {
+	local prompt_file="$1" ver major
+	NODE="${NODE_BIN:-$(command -v node)}"
+	[[ -n "$NODE" ]] && ver=$("$NODE" --version 2>/dev/null)
+	ver="${ver#v}"
+	major="${ver%%.*}"
+	if [[ "$major" != <-> ]] || (( major < 22 )); then
+		log "ERROR: node '$NODE' is v${ver:-?}; bin/run-once.mjs needs node >= 22 (set NODE_BIN in .env) — not spawning $prompt_file"
+		exit 1
+	fi
+}
+
 # Detached nohup spawn from the clean dir (EINTR-safe) of bin/run-once.mjs,
 # which runs the harness, enforces the MAX_RUN_SECONDS watchdog and removes the
 # lane on exit. Only heartbeat runs pass --session (resume from and store
@@ -86,6 +101,7 @@ acquire_lane() {
 spawn_run() {
 	local prompt_file="$1"
 	shift
+	require_node "$prompt_file"
 	local lane
 	lane=$(acquire_lane) || { log "all $MAX_CONCURRENT lanes busy — deferring $prompt_file"; return 1; }
 	local ts
@@ -95,14 +111,14 @@ spawn_run() {
 	if [[ "$prompt_file" == drain.md ]]; then
 		nohup python3 "$DAEMON_HOME/narrator.py" "runs/$ts.log" >/dev/null 2>&1 &
 	fi
-	nohup node "$DAEMON_HOME/bin/run-once.mjs" \
+	nohup "$NODE" "$DAEMON_HOME/bin/run-once.mjs" \
 		--prompt "prompts/$prompt_file" \
 		--log "runs/$ts.log" \
 		--lane "$lane" \
 		--model "$MODEL" \
 		--max-turns "$MAX_TURNS" \
 		--timeout-s "$MAX_RUN_SECONDS" \
-		"$@" >/dev/null 2>&1 &
+		"$@" >>"runs/$ts.log" 2>&1 &
 	echo $! >"$lane/pid"
 	log "spawned $prompt_file in lane ${lane:t} (pid $(cat "$lane/pid"), log runs/$ts.log)"
 }
