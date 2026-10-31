@@ -81,19 +81,19 @@ describe('AC2: warm-worker refuses to start on a missing key', () => {
   const PROMPT = 'Owner is {{OWNER_SENDER}}.\n'
 
   test('missing key: exits with the key named and never spawns the harness', async () => {
-    const r = await runWorker({ result: SUCCESS, pending: 0, durationMs: 1500, prompt: PROMPT, overlay: { OTHER: 'x' } })
+    const r = await runWorker({ result: SUCCESS, pending: 0, durationMs: 3000, prompt: PROMPT, overlay: { OTHER: 'x' } })
     assert.match(r.log, /refusing to start: .*local\.json: prompt overlay is missing key\(s\): OWNER_SENDER/)
     assert.equal(r.events.filter((e) => e.kind === 'spawn').length, 0)
   })
 
   test('missing prompts/local.json: exits and never spawns the harness', async () => {
-    const r = await runWorker({ result: SUCCESS, pending: 0, durationMs: 1500, prompt: PROMPT })
+    const r = await runWorker({ result: SUCCESS, pending: 0, durationMs: 3000, prompt: PROMPT })
     assert.match(r.log, /refusing to start: .*cannot read prompt overlay/)
     assert.equal(r.events.filter((e) => e.kind === 'spawn').length, 0)
   })
 
   test('complete overlay: the harness gets the rendered system prompt', async () => {
-    const r = await runWorker({ result: SUCCESS, pending: 0, durationMs: 1500, prompt: PROMPT, overlay: { OWNER_SENDER: 'U0OWNER' } })
+    const r = await runWorker({ result: SUCCESS, pending: 0, durationMs: 3000, prompt: PROMPT, overlay: { OWNER_SENDER: 'U0OWNER' } })
     const argv = r.events.find((e) => e.kind === 'spawn').argv
     assert.equal(argv[argv.indexOf('--append-system-prompt') + 1], 'Owner is U0OWNER.\n')
   })

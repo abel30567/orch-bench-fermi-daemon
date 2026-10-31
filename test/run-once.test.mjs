@@ -53,7 +53,7 @@ const flag = (argv, name) => (argv.includes(name) ? argv[argv.indexOf(name) + 1]
 describe('AC1: cold argv has the warm worker\'s settings surface', () => {
   test('setting sources and allowed tools match a live warm spawn; no skip-permissions', async () => {
     const [warm, cold] = await Promise.all([
-      runWorker({ result: SUCCESS, pending: 0, durationMs: 1000 }),
+      runWorker({ result: SUCCESS, pending: 0, durationMs: 3000 }),
       runOnceCli({ args: ['--model', 'claude-opus-4-6[1m]', '--max-turns', '50', '--timeout-s', '60'] }),
     ])
     const warmArgv = warm.events.find((e) => e.kind === 'spawn').argv
