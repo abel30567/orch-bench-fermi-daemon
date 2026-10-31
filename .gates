@@ -1,0 +1,103 @@
+
+added 104 packages in 1s
+
+> test
+> node --test test/*.test.ts
+
+✔ parseTokens: simple, bracketed, accents, trailing punctuation, emails (1.833333ms)
+✔ resolve exact and bracketed names, lid vs pn mode (0.66ms)
+✔ case/accent-insensitive and unique prefix; ambiguous prefix left intact (0.262791ms)
+✔ aliases take priority over pushName and may be bare digits (0.18025ms)
+✔ raw @digits of a known member is turned into a mention (0.088291ms)
+✔ unknown names never alter the text (0.162042ms)
+✔ chunkText never splits an @digits token; mentionsIn picks per chunk (0.2025ms)
+✔ MentionDirectory merges sightings, persists, and reloads aliases (1.62925ms)
+✔ resolveLocalMedia accepts a file inside media/out and infers the mimetype (1.785875ms)
+✔ resolveLocalMedia rejects paths outside media/out, traversal, symlink escapes, and oversize (2.5095ms)
+✔ parseOutboxMessages keeps text rows and drops malformed media blocks (0.477625ms)
+✔ captionFor and remoteFileName (0.125333ms)
+✔ SendAttempts gives up immediately on MediaRejected and after 3 transient failures (0.129417ms)
+✔ buildWaMediaContent: image with caption from body, document with fileName, audio caption as follow-up (1.171417ms)
+ℹ tests 14
+ℹ suites 0
+ℹ pass 14
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1090.431625
+
+> typecheck
+> tsc --noEmit
+
+
+added 28 packages in 840ms
+
+> test
+> node --test test/*.test.ts
+
+✔ text rows become plain content (0.667ms)
+✔ local attachment becomes a file upload with the caption as content (0.305375ms)
+✔ remote attachment keeps the url and the given file_name; bad local path is rejected (0.253542ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 252.597209
+
+> typecheck
+> tsc --noEmit
+
+
+added 47 packages in 724ms
+
+> test
+> node --test test/*.test.ts
+
+✔ message_id is client_msg_id when present (0.412459ms)
+✔ message_id falls back to ts without client_msg_id (0.547833ms)
+✔ a retried POST carries the same message_id (1015.014875ms)
+✔ local attachment streams the file with the caption as initial_comment (0.757875ms)
+✔ paths outside media/out are rejected (0.299167ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 5
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1091.629958
+
+> typecheck
+> tsc --noEmit
+
+
+> test
+> node scripts/prompt-lint.mjs && node --test test/*.test.mjs test/conformance/*.test.mjs
+
+prompt-lint: ok
+▶ harness conformance: claude-code
+  ✔ 1. one turn_end per turn (543.475708ms)
+  ✔ 2. an interrupt mid-turn ends the turn; the next send works in the same session (114.479083ms)
+  ✔ 3. tool names are normalized (70.882625ms)
+  ✔ 4. tool_result is correlated by id (43.851208ms)
+  ✔ 5. every error kind surfaces as turn_end.ok=false with the right kind (148.010708ms)
+  ✔ 6. a hung harness is killed after the timeout and reported as timeout (522.909625ms)
+  ✔ 7. a harness crash is reported as crash and the session can be restarted (90.396333ms)
+  ✔ 8. credential isolation: a tokenFd token never reaches argv, child env or events (68.172833ms)
+  ✔ 9. secrets in tool inputs are redacted in narrator output (129.451167ms)
+✔ harness conformance: claude-code (1734.629167ms)
+▶ harness conformance: pi
+  ✔ 1. one turn_end per turn (685.573375ms)
+  ✔ 2. an interrupt mid-turn ends the turn; the next send works in the same session (109.588583ms)
+  ✖ 3. tool names are normalized (45.8765ms) # pi's built-in shell tool is `bash`, not `Bash`; the contract keeps name = bareToolName(rawName), so it stays `bash` (MCP prefixes are stripped)
+  ✔ 4. tool_result is correlated by id (66.406ms)
+  ✔ 5. every error kind surfaces as turn_end.ok=false with the right kind (154.253209ms)
+  ✔ 6. a hung harness is killed after the timeout and reported as timeout (527.412375ms)
+  ✔ 7. a harness crash is reported as crash and the session can be restarted (108.154833ms)
+  ✖ 8. credential isolation: a tokenFd token never reaches argv, child env or events (1.231083ms) # SWAP-GATE BLOCKER: pi takes its credential only from argv, env (inherited by its bash tool) or auth.json (readable by its tools); no fd handoff, so the adapter refuses tokenFd (see harness/pi.mjs)
+  ✔ 9. secrets in tool inputs are redacted in narrator output (132.392125ms)
+✔ harness conformance: pi (1832.322958ms)

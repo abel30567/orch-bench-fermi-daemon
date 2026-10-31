@@ -155,13 +155,17 @@ export function runOnce(o) {
   const all = []
   let outcome = null
   let stderr = ''
+  let spawnError = null
   events.on('event', (ev) => {
     all.push(ev)
     if (ev.type === 'turn_end') outcome = ev
   })
   events.on('stderr', (s) => (stderr += s))
   pipeEvents(child, events, () => since)
-  const done = new Promise((resolve) => child.on('close', (code) => resolve({ code, outcome, events: all, stderr })))
+  child.on('error', (err) => {
+    if (child.pid == null) spawnError = err
+  })
+  const done = new Promise((resolve) => child.on('close', (code) => resolve({ code, outcome, events: all, stderr, spawnError })))
   child.stdin.end(o.prompt ?? '')
   return { pid: child.pid, events, done, close: (signal) => child.kill(signal) }
 }
