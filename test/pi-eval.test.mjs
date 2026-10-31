@@ -127,6 +127,16 @@ describe('pr-60 AC2: the sandbox auth.json is removed after the attempt', () => 
     for (let i = 0; i < 50 && existsSync(auth); i++) await new Promise((r) => setTimeout(r, 20))
     assert.equal(existsSync(auth), false)
   })
+
+  test('a pi binary that fails to spawn (ENOENT) also removes it, and done resolves', async () => {
+    const sandboxHome = tmp()
+    const auth = join(sandboxHome, '.pi', 'agent', 'auth.json')
+    const r = pi.runOnce({ bin: join(tmp(), 'no-such-pi'), prompt: 'go', cwd: tmp(), mcpConfig: LOCAL, sandboxHome })
+    assert.equal(existsSync(auth), true)
+    const done = await r.done
+    assert.notEqual(done.code, 0)
+    assert.equal(existsSync(auth), false)
+  })
 })
 
 describe('pr-60 AC3: a non-localhost MCP URL refuses to start', () => {

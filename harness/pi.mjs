@@ -156,7 +156,15 @@ function open(o) {
     box?.cleanup()
     throw err
   }
-  if (box) child.on('close', box.cleanup) // registered first, so it runs before runOnce's done resolves
+  if (box) {
+    // A spawn failure (e.g. ENOENT) is an async 'error', not a throw; 'close' follows it.
+    let cleaned = false
+    const cleanup = () => {
+      if (!cleaned) (cleaned = true), box.cleanup()
+    }
+    child.on('error', cleanup)
+    child.on('close', cleanup) // registered first, so it runs before runOnce's done resolves
+  }
   const events = new EventEmitter()
   const norm = createNormalizer()
   // Split on LF only: pi's records may hold U+2028/U+2029, which readline splits on.
