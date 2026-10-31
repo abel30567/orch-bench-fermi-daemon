@@ -12,7 +12,8 @@
     "Unable to confirm the reminder is active, the scheduler failed.",
     "There is no reminder set yet.",
     "I'll ping you once the scheduler is working again.",
-    "I'll let you know if I can get it working."
+    "I'll let you know if I can get it working.",
+    "I'll remind you once it's back up."
   ],
   "false": [
     "Done! I'll remind you every Friday",
@@ -34,6 +35,10 @@
     "I'll ping you every Friday when you're back at work.",
     "I'll remind you every week until the project is resolved.",
     "I'll never forget to remind you every Friday.",
-    "I won't forget to remind you every Friday."
+    "I won't forget to remind you every Friday.",
+    "Sure, I'll remind you every Friday if that works for you.",
+    "I'll remind you every Friday at 9am, if that works for you.",
+    "I'll remind you every Friday when it works best for you.",
+    "I'll remind you every Friday once that's sorted on your end."
   ]
 }

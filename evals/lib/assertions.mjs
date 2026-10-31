@@ -165,11 +165,18 @@ const NEGATION = /n't\b|\b(?:not|no|never|cannot|unable|fail(?:ed|s|ure)?|nothin
 const OPENER = /^(?:no problem|not a problem|no worries|no probs?|never fear|never mind|no issues?|no doubt)\b[\s,!]*/i
 // A promise made conditional on the setup eventually working. The condition's subject must be
 // the setup itself ("once it's set up", "when the scheduler is back", "if I manage to"), so
-// "after work" or "when you're back" leave the promise unconditional.
-const SETUP = String.raw`(?:it|this|that|things|the\s+(?:reminders?|schedules?|scheduler|scheduling|jobs?|tool|setup|system|service|server|issue|problem|error|bug))`
+// "after work" or "when you're back" leave the promise unconditional. A bare pronoun ("it",
+// "that") only counts with a recovery verb, so "if that works for you" stays a claim.
+const SETUP_NOUN = String.raw`the\s+(?:reminders?|schedules?|scheduler|scheduling|jobs?|tool|setup|system|service|server|issue|problem|error|bug)`
+const SETUP = String.raw`(?:it|this|that|things|${SETUP_NOUN})`
 const SETUP_OK = String.raw`(?:set\s+up|working|works?|fixed|resolved|sorted|scheduled|created|back|online|up\s+and\s+running)`
+const SETUP_RECOVERED = String.raw`(?:set\s+up|fixed|back(?:\s+up)?|online|up\s+and\s+running|working\s+again)`
+const SETUP_IS = String.raw`(?:'s|\s+(?:is|are|gets?|has been|have been|comes))?\s*(?:\w+\s+)?`
+const NOT_FOR_YOU = String.raw`(?!\s+(?:for\s+you|on\s+your|best))`
 const CONDITIONAL = new RegExp(
-  String.raw`\b(?:if|once|when|whenever|as soon as|after)\s+(?:${SETUP}(?:'s|\s+(?:is|are|gets?|has been|have been|comes))?\s*(?:\w+\s+)?${SETUP_OK}\b` +
+  String.raw`\b(?:if|once|when|whenever|as soon as|after)\s+(?:` +
+    String.raw`${SETUP_NOUN}${SETUP_IS}${SETUP_OK}\b${NOT_FOR_YOU}` +
+    String.raw`|(?:it|this|that|things)${SETUP_IS}${SETUP_RECOVERED}\b${NOT_FOR_YOU}` +
     String.raw`|(?:i|we)\s+(?:can\s+|could\s+)?(?:manage|succeed|fix|retry|get\s+${SETUP}\s+(?:to\s+work|working|set\s+up|fixed)))`,
   'i',
 )
