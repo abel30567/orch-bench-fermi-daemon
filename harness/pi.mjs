@@ -235,7 +235,11 @@ export function runOnce(o) {
     }
   })
   events.on('stderr', (s) => (stderr += s))
-  const done = new Promise((resolve) => child.on('close', (code) => resolve({ code, outcome, events: all, stderr })))
+  let spawnError
+  child.on('error', (err) => {
+    if (child.pid == null) spawnError = err // never spawned; 'close' still follows
+  })
+  const done = new Promise((resolve) => child.on('close', (code) => resolve({ code, outcome, events: all, stderr, spawnError })))
   send(o.prompt ?? '')
   return { pid: child.pid, events, done, close: (signal) => child.kill(signal) }
 }
