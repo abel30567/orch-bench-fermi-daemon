@@ -4,7 +4,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, chmodSync, realpathSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ROOT, runWorker } from './run-worker.mjs'
+import { ROOT, runWorker, untilSpawned } from './run-worker.mjs'
 
 const RUN_ONCE = join(ROOT, 'bin/run-once.mjs')
 const FAKE_ONCE = join(ROOT, 'test/fixtures/fake-claude-once.mjs')
@@ -53,7 +53,7 @@ const flag = (argv, name) => (argv.includes(name) ? argv[argv.indexOf(name) + 1]
 describe('AC1: cold argv has the warm worker\'s settings surface', () => {
   test('setting sources and allowed tools match a live warm spawn; no skip-permissions', async () => {
     const [warm, cold] = await Promise.all([
-      runWorker({ result: SUCCESS, pending: 0, durationMs: 1000 }),
+      runWorker({ result: SUCCESS, pending: 0, durationMs: 0, act: untilSpawned }),
       runOnceCli({ args: ['--model', 'claude-opus-4-6[1m]', '--max-turns', '50', '--timeout-s', '60'] }),
     ])
     const warmArgv = warm.events.find((e) => e.kind === 'spawn').argv
@@ -89,6 +89,14 @@ describe('AC1: cold argv has the warm worker\'s settings surface', () => {
     const r = await runOnceCli({ env: { FAKE_ONCE: 'crash' } })
     assert.equal(r.code, 3)
     assert.match(r.log, /boom: harness crashed/)
+    assert.ok(r.laneGone)
+  })
+
+  test('harness binary missing: the spawn error lands in the run log, lane removed', async () => {
+    const r = await runOnceCli({ env: { CLAUDE_BIN: '/nope' } })
+    assert.equal(r.code, 127)
+    assert.match(r.log, /^run-once: spawn error: spawn \/nope ENOENT$/m)
+    assert.match(r.log, /^run-once: exit 127$/m)
     assert.ok(r.laneGone)
   })
 })

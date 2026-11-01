@@ -64,7 +64,7 @@ const run = harness.runOnce({
   settingSources: SETTING_SOURCES,
   resume: resume || undefined,
 })
-note(`harness pid ${run.pid}`)
+if (run.pid != null) note(`harness pid ${run.pid}`)
 
 let sessionId = null
 run.events.on('raw', (line) => {
@@ -96,9 +96,12 @@ const watchdog =
     killTimer = setTimeout(() => run.close('SIGKILL'), KILL_GRACE_MS)
   }, Number(o['timeout-s']) * 1000)
 
-const { code } = await run.done
+const { code, error } = await run.done
 clearTimeout(watchdog)
 clearTimeout(killTimer)
+// poll.sh discards our stdout/stderr, so a harness that can't be spawned is reported here.
+if (error) note(`spawn error: ${error.message}`)
 if (o.session && sessionId && !timedOut) writeFileSync(o.session, sessionId + '\n')
-note(`exit ${timedOut ? 'watchdog' : code}`)
-out.end(() => process.exit(timedOut ? 124 : (code ?? 1)))
+const exitCode = timedOut ? 124 : error ? 127 : (code ?? 1)
+note(`exit ${timedOut ? 'watchdog' : error ? exitCode : code}`)
+out.end(() => process.exit(exitCode))

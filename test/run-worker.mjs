@@ -13,6 +13,22 @@ export const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const SCALE = 60
 export const sim = (ms) => Math.round(ms / SCALE)
 
+export const until = async (cond, ms = 5000) => {
+  for (const t0 = Date.now(); !cond(); ) {
+    if (Date.now() - t0 > ms) throw new Error('timed out')
+    await new Promise((r) => setTimeout(r, 20))
+  }
+}
+
+// The fake harness's records so far (turns.log in the worker's HOME).
+export const fakeRecords = (home) => {
+  const f = join(home, 'turns.log')
+  return existsSync(f) ? readFileSync(f, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []
+}
+
+// An `act` that runs the worker until the fake has recorded its spawn (not a fixed window: slow under load).
+export const untilSpawned = ({ home }) => until(() => fakeRecords(home).some((e) => e.kind === 'spawn'), 15000).catch(() => {})
+
 // `env` adds/overrides worker env vars; `prompt` is prompts/drain.md, `overlay` (if set) prompts/local.json; `act({ log, home })` runs alongside the
 // worker (log() is its output so far). Returns the fake harness's records and
 // the worker's runs/ files.
