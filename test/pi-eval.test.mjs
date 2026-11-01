@@ -3,7 +3,7 @@
 // ~/.pi/agent (mcp.json pointing at production) is never used.
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ROOT } from './run-worker.mjs'
@@ -143,6 +143,33 @@ describe('pr-60 F1: a sandboxHome that is not separate from the real HOME refuse
       chmodSync(realMcp, 0o600)
       assert.match(readFileSync(realMcp, 'utf8'), /fermi\.example\.workers\.dev/)
       chmodSync(realMcp, 0o000)
+    })
+  }
+})
+
+describe('pr-60 F2: pre-existing sandbox mcp.json/auth.json links to the real files are replaced, not followed', () => {
+  for (const [label, make] of [
+    ['mcp.json symlink', (d) => symlinkSync(realMcp, join(d, 'mcp.json'))],
+    ['auth.json symlink', (d) => symlinkSync(join(realHome, '.pi/agent/auth.json'), join(d, 'auth.json'))],
+    ['auth.json hardlink', (d) => linkSync(join(realHome, '.pi/agent/auth.json'), join(d, 'auth.json'))],
+  ]) {
+    test(label, async () => {
+      const sandboxHome = tmp()
+      const agentDir = join(sandboxHome, '.pi/agent')
+      mkdirSync(agentDir, { recursive: true })
+      make(agentDir)
+      chmodSync(realMcp, 0o600) // writable, so following the link would succeed
+      try {
+        const run = pi.runOnce({ bin, prompt: 'home', mcpConfig: evalConfig(), sandboxHome, env: { FAKE_DIR: tmp() } })
+        assert.equal(lstatSync(join(agentDir, 'mcp.json')).isSymbolicLink(), false)
+        assert.equal(lstatSync(join(agentDir, 'auth.json')).isSymbolicLink(), false)
+        assert.equal(lstatSync(join(agentDir, 'auth.json')).nlink, 1)
+        await run.done
+        assert.match(readFileSync(realMcp, 'utf8'), /fermi\.example\.workers\.dev/)
+        assert.equal(readFileSync(join(realHome, '.pi/agent/auth.json'), 'utf8'), REAL_AUTH)
+      } finally {
+        chmodSync(realMcp, 0o000)
+      }
     })
   }
 })

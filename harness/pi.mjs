@@ -49,7 +49,7 @@
 
 import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { constants, copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { isLocalUrl } from '../evals/lib/net.mjs'
@@ -108,10 +108,15 @@ function prepareSandbox({ mcpConfig, sandboxHome }) {
   const agentDir = join(sandboxHome, '.pi', 'agent')
   assertSeparate(sandboxHome, agentDir)
   mkdirSync(agentDir, { recursive: true })
-  writeFileSync(join(agentDir, 'mcp.json'), JSON.stringify(mcp, null, 2))
+  const mcpFile = join(agentDir, 'mcp.json')
   const realAuth = join(homedir(), '.pi', 'agent', 'auth.json')
   const auth = join(agentDir, 'auth.json')
-  if (existsSync(realAuth)) copyFileSync(realAuth, auth)
+  // A pre-existing entry may be a symlink or hardlink to the real file: unlink it
+  // (never follow it) and create fresh files exclusively.
+  rmSync(mcpFile, { force: true })
+  rmSync(auth, { force: true })
+  writeFileSync(mcpFile, JSON.stringify(mcp, null, 2), { flag: 'wx' })
+  if (existsSync(realAuth)) copyFileSync(realAuth, auth, constants.COPYFILE_EXCL)
   return { env: { HOME: sandboxHome, PI_CODING_AGENT_DIR: agentDir }, cleanup: () => rmSync(auth, { force: true }) }
 }
 
