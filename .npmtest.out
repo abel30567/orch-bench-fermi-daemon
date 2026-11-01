@@ -1,0 +1,323 @@
+
+> test
+> node scripts/prompt-lint.mjs && node --test test/*.test.mjs test/conformance/*.test.mjs
+
+prompt-lint: ok
+▶ AC1: exit reasons and results from the fake harness
+  ✔ success → done with the RESULT: line and the cost (1462.7235ms)
+  ✔ 429 → failed with exit reason `harness api_error 429`, matching the route-health regex (1718.437458ms)
+  ✔ spend limit with no status → `harness api_error spend_limit` (1314.801458ms)
+  ✔ real spend cap blocking compaction (blocking-limit fixture) → `harness api_error spend_limit` (1205.213208ms)
+  ✔ rate limit with no status → `harness api_error rate_limit` (1676.771791ms)
+  ✔ auth error with no status → `harness api_error auth` (2263.875791ms)
+  ✔ auth error with a status → `harness api_error 401` (1604.280958ms)
+  ✔ API error with no status → `harness api_error api_error` (1210.893791ms)
+  ✔ context overflow is not a route error → `harness context_overflow` (1313.703333ms)
+  ✔ crash → failed with `harness exited <code>` and the stderr tail (1062.643ms)
+  ✔ missing harness binary → `harness exited 127`, not a runner crash (86.327625ms)
+✔ AC1: exit reasons and results from the fake harness (14920.65425ms)
+▶ AC2: argv and env for the claude route are unchanged
+  ✔ claude route argv (origin/main @ 13dec96), CLAUDE_BIN, cwd and env (1105.534333ms)
+  ✔ proxy route: keys harnessEnv() deletes stay out of the harness env (3295.841542ms)
+✔ AC2: argv and env for the claude route are unchanged (4401.509583ms)
+▶ progress and stuck notes
+  ✔ `working:` notes count turns and name the last tool; a stall gets one stuck note (1761.376042ms)
+✔ progress and stuck notes (1761.479833ms)
+✔ box-runner's inline classifyResult agrees with lib/turn-outcome.mjs on every result fixture (298.900041ms)
+▶ harness conformance: claude-code
+  ✔ 1. one turn_end per turn (1486.6785ms)
+  ✔ 2. an interrupt mid-turn ends the turn; the next send works in the same session (108.573708ms)
+  ✔ 3. tool names are normalized (66.1685ms)
+  ✔ 4. tool_result is correlated by id (66.992083ms)
+  ✔ 5. every error kind surfaces as turn_end.ok=false with the right kind (173.460625ms)
+  ✔ 6. a hung harness is killed after the timeout and reported as timeout (528.237959ms)
+  ✔ 7. a harness crash is reported as crash and the session can be restarted (129.033ms)
+  ✔ 8. credential isolation: a tokenFd token never reaches argv, child env or events (90.738875ms)
+  ✔ 9. secrets in tool inputs are redacted in narrator output (212.011125ms)
+✔ harness conformance: claude-code (2863.1835ms)
+▶ statistics
+  ✔ Wilson 95% interval matches the textbook values (0.465625ms)
+  ✔ the difference interval is Newcombe (1998) method 10: 56/70 − 48/80 → [0.0524, 0.3339] (0.106833ms)
+  ✔ pass^k is the unbiased estimator and needs k attempts (0.0715ms)
+  ✔ nearest-rank percentile (0.086ms)
+✔ statistics (1.285583ms)
+▶ AC1: each swap-gate rule flips the verdict
+  ✔ identical healthy runs are GO (1.485ms)
+  ✔ critical: one failed attempt out of 10 (2.754333ms)
+  ✔ critical: only 4 attempts per scenario (pass^5 unprovable) (0.480666ms)
+  ✔ critical: no critical results (0.747917ms)
+  ✔ core: candidate 10 pp worse is not non-inferior (1.8255ms)
+  ✔ core: missing in the candidate (2.536791ms)
+  ✔ latency: p95 1.3× the baseline (0.311291ms)
+  ✔ cost: 1.6× the baseline (0.424709ms)
+  ✔ cost: unknown in the candidate (0.488416ms)
+  ✔ protocol: one protocol assertion failure (5.885833ms)
+  ✔ soak: the soak attempt failed (0.575042ms)
+  ✔ soak: no soak results (0.795833ms)
+  ✔ credentials: credential isolation failed (0.924ms)
+  ✔ credentials: no credential isolation results (0.337041ms)
+  ✔ boundaries: p95 exactly 1.25× and cost exactly 1.5× still pass (4.659958ms)
+  ✔ a core loss within the margin is non-inferior with enough attempts (0.967ms)
+  ✔ negative controls (expectedOutcome fail) are not graded (0.722292ms)
+  ✔ a non-protocol assertion failure is not a protocol violation (0.962458ms)
+✔ AC1: each swap-gate rule flips the verdict (27.604791ms)
+▶ report contents
+  ✔ ratios, tool calls per task, error kinds (0.950334ms)
+✔ report contents (1.326459ms)
+▶ AC2: the markdown report
+  ✔ renders a per-category table and the verdict line (3.488042ms)
+  ✔ the CLI writes compare.md and compare.json, exit 0 on GO and 1 on NO-GO, 2 on usage (261.563209ms)
+✔ AC2: the markdown report (265.172833ms)
+▶ results carry a category
+  ✔ from category, else severity, else the pack directory; the schema accepts it (2.206958ms)
+  ✔ run.mjs writes it into results.json (150.857792ms)
+✔ results carry a category (153.254375ms)
+▶ judge
+  ✔ the judge model id is fixed in config (0.071583ms)
+  ✔ the prompt has the rubric, the request and the replies, and nothing about the harness (0.108167ms)
+  ✔ parseVerdict scores the mean of the rubric and rejects bad output (0.34075ms)
+  ✔ the fake judge penalizes Slack format, AI self-reference and empty replies (0.274333ms)
+  ✔ modelJudge goes through the harness adapter with the configured model and no MCP servers (0.648417ms)
+  ✔ a failed judge turn is an error, not a score (0.419292ms)
+  ✔ judgeInput takes only channel_send texts from the trace (0.07225ms)
+  ✔ the CLI scores a fake-harness run with --fake into judge.json (204.690917ms)
+  ✔ judgeRun marks attempts without a reply or a scenario (0.443792ms)
+✔ judge (207.243667ms)
+▶ DMN-13 AC1: the control pack passes against the fake harness, every scenario with a negative control
+  ✔ 7 scenarios pass and their 7 negative controls fail on the intended assertions, exit 0 (531.597291ms)
+  ✔ each negative control is its scenario with only the fake script changed (1.649166ms)
+✔ DMN-13 AC1: the control pack passes against the fake harness, every scenario with a negative control (533.901167ms)
+▶ session mode (evals/lib/session.mjs)
+  ✔ emergency stop: the turn is interrupted after the in-flight tool, cleanup and a later turn run in the same session (75.822541ms)
+  ✔ the session gets drain.md as its system prompt and the warm-worker turn texts in order (21.653667ms)
+  ✔ a session that dies before a turn fails the attempt (3.528ms)
+  ✔ the turn texts match warm-worker.mjs's (0.252708ms)
+  ✔ a Teams inbound needs a teams session turn and is never posted to a webhook (0.64075ms)
+  ✔ the Teams scenarios are fake-only: another harness skips them, not fails, and summary.json lists the skips (44.089334ms)
+  ✔ harnesses must be a non-empty list of names (0.708458ms)
+✔ session mode (evals/lib/session.mjs) (147.220125ms)
+▶ order assertion with argument matchers
+  ✔ a { tool, args } entry matches only a call with those args (0.168333ms)
+✔ order assertion with argument matchers (0.210333ms)
+▶ AC1: the examples run under the fake harness
+  ✔ 3 examples pass, the negative example is reported as a failure, exit 0 (372.851834ms)
+  ✔ a failing assertion that was expected to pass fails the run (exit 1) (123.408666ms)
+  ✔ -k repeats every scenario; shell-expanded paths work too (147.231209ms)
+✔ AC1: the examples run under the fake harness (644.105125ms)
+▶ AC2: fake harness, localhost only
+  ✔ the runner passes under a non-loopback connection trap; its MCP config is the local fermi server (103.554125ms)
+  ✔ the trap itself blocks a non-loopback connection (23.293958ms)
+  ✔ the harness gets prompts/drain.md, only mcp__fermi__* tools and no claude.ai connectors (45.026333ms)
+✔ AC2: fake harness, localhost only (172.129041ms)
+▶ AC3: results.json matches evals/schema/results.schema.json
+  ✔ a full run validates (122.157666ms)
+  ✔ the validator rejects a malformed entry (0.133708ms)
+  ✔ a runner error (bad --worker checkout) still yields a schema-valid failed result (48.220666ms)
+✔ AC3: results.json matches evals/schema/results.schema.json (170.771541ms)
+▶ usage errors exit 2
+  ✔ F2: a non-fake harness without --worker is refused instead of grading against the fake target (42.415083ms)
+  ✔ F3: malformed scenario JSON is a clear error, not a stack trace (47.427917ms)
+✔ usage errors exit 2 (89.952542ms)
+▶ AC4: refuses non-localhost URLs
+  ✔ FERMI_URL=https://fermi.example.workers.dev → exit 2 before anything starts (41.875833ms)
+  ✔ SLACK_API_BASE=https://slack.com → exit 2 before anything starts (44.5805ms)
+  ✔ MACOS_MCP_URL=http://127.0.0.1.example.com:9000 → exit 2 before anything starts (41.289416ms)
+  ✔ a localhost FERMI_URL is allowed (104.453875ms)
+  ✔ assertLocalUrls (0.481875ms)
+✔ AC4: refuses non-localhost URLs (233.020083ms)
+▶ driver: faults, fakes and state
+  ✔ an error fault answers the tool with isError and never reaches the target (17.402834ms)
+  ✔ a latency fault delays the call; maxLatencyMs catches it (315.76475ms)
+  ✔ the run is cut at the timeout (206.425042ms)
+  ✔ F1: a timed-out attempt fails even when its assertions hold on the partial trace (205.646959ms)
+  ✔ F1: a turn_end with ok:false fails the attempt (8.442ms)
+  ✔ the fake Mac bridge answers the model-switch curl and canned commands, and records them (20.832542ms)
+  ✔ the webhook's own ack is recorded as inbound and not counted by outbox.count (10.666125ms)
+  ✔ a sender that is not allowlisted is never enqueued (10.338333ms)
+  ✔ attachments arrive in the payload the way the bridges write them (10.220167ms)
+✔ driver: faults, fakes and state (806.04875ms)
+▶ assertions
+  ✔ called "phone_call_start" (0.1465ms)
+  ✔ notCalled "channel_send" (0.027416ms)
+  ✔ exactlyOnce "mac_shell" (0.055834ms)
+  ✔ order ["task_complete","channel_send"] (0.031792ms)
+  ✔ argsMatch {"tool":"channel_send","args":{"text":"/^nope/"}} (0.220833ms)
+  ✔ argsMatch {"tool":"task_claim","args":{"limit":null}} (0.035792ms)
+  ✔ outbox.count {"eq":2,"channel":"sl"} (0.140458ms)
+  ✔ outbox.count {"max":0,"channel":"wa"} (0.044291ms)
+  ✔ task.status {"queue":"grok-bot","is":"done"} (0.0385ms)
+  ✔ noSecretIn "+15555550100" (0.138875ms)
+  ✔ maxToolCalls 3 (0.027375ms)
+  ✔ maxLatencyMs 49 (0.017917ms)
+  ✔ noSecretIn does not echo the secret (0.046167ms)
+  ✔ outbound collects every channel (0.139459ms)
+  ✔ scenario validation rejects unknown assertions and missing inbound fields (0.590375ms)
+✔ assertions (1.85675ms)
+▶ AC1: HARNESS unset spawns claude with today's argv
+  ✖ default bin (~/.local/bin/claude) (1024.75875ms)
+  ✖ CLAUDE_BIN picks the binary, argv unchanged (1017.913208ms)
+  ✔ HARNESS selects the adapter; an unknown one is an error (1.326125ms)
+✖ AC1: HARNESS unset spawns claude with today's argv (1027.58175ms)
+▶ AC2: recorded Claude stream → normalized events (golden)
+  ✔ normalizeEvent over the fixture equals the golden sequence (1.258916ms)
+  ✔ turn_end kind comes from classifyResult (11.632916ms)
+  ✔ bareToolName strips MCP server prefixes (0.07825ms)
+  ✖ the warm worker writes the raw log and the normalized log for a drain turn (1509.438292ms)
+  ✔ runOnce: box-runner argv, prompt on stdin, events plus outcome (1233.821209ms)
+  ✔ bin, configDir, tokenFd and scrubSubprocessEnv reach the child (1337.859875ms)
+✖ AC2: recorded Claude stream → normalized events (golden) (4094.5745ms)
+▶ AC3: interrupt sends today's control_request and the session survives
+  ✔ adapter session: interrupt ends the turn, the next turn runs on the same process (2913.97625ms)
+  ✔ warm worker: POST /abort interrupts the drain turn, cleanup runs in the same session (6009.294958ms)
+✔ AC3: interrupt sends today's control_request and the session survives (6010.840334ms)
+▶ AC4: narrator posts the same progress lines from the normalized log as from the raw log
+  ✔ same fixture, raw vs normalized (342.7595ms)
+✔ AC4: narrator posts the same progress lines from the normalized log as from the raw log (342.857958ms)
+▶ poll.sh cold path node check
+  ✔ AC1: a node v14 on PATH logs the error line and spawns no lane (4638.114416ms)
+  ✔ AC2: NODE_BIN overrides the node on PATH (9190.02175ms)
+  ✔ AC3: a crashing run-once leaves its error in runs/<ts>.log (3139.710375ms)
+✔ poll.sh cold path node check (16968.511542ms)
+▶ prompt-lint
+  ✔ passes on the real prompts against the vendored tool surface (89.727333ms)
+  ✔ a fake tool name in a scratch drain.md fails with the name and line (95.943042ms)
+  ✔ a tool renamed in the surface fails the prompt that still uses the old name (85.678166ms)
+✔ prompt-lint (271.969625ms)
+▶ AC1: cold argv has the warm worker's settings surface
+  ✖ setting sources and allowed tools match a live warm spawn; no skip-permissions (1313.332042ms)
+  ✔ success: stream-json in the log, harness exit code, lane removed, no session.id (1587.585542ms)
+  ✔ harness failure: its exit code and stderr pass through, lane removed (1320.396708ms)
+✖ AC1: cold argv has the warm worker's settings surface (4222.431375ms)
+▶ session.id handling (heartbeat runs)
+  ✔ an existing session.id becomes --resume (1327.604958ms)
+  ✔ no --session: no --resume (1675.02725ms)
+✔ session.id handling (heartbeat runs) (3002.829542ms)
+▶ AC2: watchdog kill and lane cleanup
+  ✔ a run over --timeout-s is killed: exit 124, harness dead, lane removed, session not stored (1034.989542ms)
+  ✔ a harness that ignores SIGTERM is SIGKILLed after the grace period (1037.427667ms)
+  ✔ SIGTERM from poll.sh's reaper stops the harness and removes the lane (1998.487792ms)
+✔ AC2: watchdog kill and lane cleanup (4071.238375ms)
+▶ classifyResult
+  ✔ blocking-limit fixture (subtype success, is_error true) is a spend limit with its reset time (24.140875ms)
+  ✔ a normal success result is ok (0.5095ms)
+  ✔ kinds from is_error, terminal_reason, api_error_status and text (0.690542ms)
+  ✔ parseResetMs rolls to the next day and falls back to local time (0.52125ms)
+  ✔ chatFromEvent reads the claimed task from a task_claim tool_result (0.138917ms)
+✔ classifyResult (26.567ms)
+▶ Backoff
+  ✔ 10 consecutive error turns: non-decreasing, >= 30s apart, capped at 30 min (0.233917ms)
+  ✔ a reset time later than the backoff wins; reset() clears it (0.144166ms)
+  ✔ a 10 h reset time is capped at 30 min (0.20875ms)
+✔ Backoff (0.7855ms)
+▶ warm-worker with a failing harness
+  ✔ fixture result for 10 simulated minutes: at most 5 drain turns, alert logged only (10048.821167ms)
+  ℹ 1 drain turns
+  ✔ no reset time: exponential backoff, >= 30 s apart, one alert to the claimed chat (10040.859541ms)
+  ℹ 5 drain turns
+  ✖ a successful turn after errors resets the backoff and drains normally (3037.581417ms)
+  ✔ context overflow respawns the harness before the retry (6029.375458ms)
+✖ warm-worker with a failing harness (10052.244084ms)
+ℹ tests 148
+ℹ suites 32
+ℹ pass 143
+ℹ fail 5
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 21497.0535
+
+✖ failing tests:
+
+test at test/harness.test.mjs:45:3
+✖ default bin (~/.local/bin/claude) (1024.75875ms)
+  AssertionError [ERR_ASSERTION]: 2026-11-01T17:25:04.345Z starting warm claude (model=claude-sonnet-5)
+  2026-11-01T17:25:04.362Z control endpoint on 127.0.0.1:50953/abort
+  
+  
+  0 !== 1
+  
+      at TestContext.<anonymous> (file:///private/var/folders/g1/nj_4qy4577l_lw4kfyj06qh00000gn/T/hbar-orch-GNLRv3/a-oLcTda/work/test/harness.test.mjs:48:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+      at async Test.run (node:internal/test_runner/test:1054:7)
+      at async Promise.all (index 0)
+      at async Suite.run (node:internal/test_runner/test:1442:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:297:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 1,
+    operator: 'strictEqual'
+  }
+
+test at test/harness.test.mjs:55:3
+✖ CLAUDE_BIN picks the binary, argv unchanged (1017.913208ms)
+  AssertionError [ERR_ASSERTION]: 2026-11-01T17:25:04.338Z starting warm claude (model=claude-sonnet-5)
+  2026-11-01T17:25:04.351Z control endpoint on 127.0.0.1:50943/abort
+  
+  
+  0 !== 1
+  
+      at TestContext.<anonymous> (file:///private/var/folders/g1/nj_4qy4577l_lw4kfyj06qh00000gn/T/hbar-orch-GNLRv3/a-oLcTda/work/test/harness.test.mjs:59:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+      at async Test.run (node:internal/test_runner/test:1054:7)
+      at async Promise.all (index 1)
+      at async Suite.run (node:internal/test_runner/test:1442:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:297:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 1,
+    operator: 'strictEqual'
+  }
+
+test at test/harness.test.mjs:117:3
+✖ the warm worker writes the raw log and the normalized log for a drain turn (1509.438292ms)
+  AssertionError [ERR_ASSERTION]: 2026-11-01T17:25:05.267Z starting warm claude (model=claude-sonnet-5)
+  2026-11-01T17:25:05.274Z control endpoint on 127.0.0.1:51517/abort
+  
+      at TestContext.<anonymous> (file:///private/var/folders/g1/nj_4qy4577l_lw4kfyj06qh00000gn/T/hbar-orch-GNLRv3/a-oLcTda/work/test/harness.test.mjs:120:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+      at async Test.run (node:internal/test_runner/test:1054:7)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: true,
+    operator: '=='
+  }
+
+test at test/run-once.test.mjs:52:3
+✖ setting sources and allowed tools match a live warm spawn; no skip-permissions (1313.332042ms)
+  TypeError [Error]: Cannot read properties of undefined (reading 'argv')
+      at TestContext.<anonymous> (file:///private/var/folders/g1/nj_4qy4577l_lw4kfyj06qh00000gn/T/hbar-orch-GNLRv3/a-oLcTda/work/test/run-once.test.mjs:57:65)
+      at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+      at async Test.run (node:internal/test_runner/test:1054:7)
+      at async Promise.all (index 0)
+      at async Suite.run (node:internal/test_runner/test:1442:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:297:3)
+
+test at test/turn-outcome.test.mjs:112:3
+✖ a successful turn after errors resets the backoff and drains normally (3037.581417ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /drain recovered after 2 error turn\(s\)/. Input:
+  
+  '2026-11-01T17:25:04.370Z starting warm claude (model=claude-sonnet-5)\n' +
+    '2026-11-01T17:25:04.382Z control endpoint on 127.0.0.1:50960/abort\n' +
+    '2026-11-01T17:25:06.082Z drain: 1 pending — firing warm turn\n' +
+    '2026-11-01T17:25:06.136Z drain turn done in 0.1s\n' +
+    "2026-11-01T17:25:06.137Z drain turn error (spend_limit): Prompt is too long · automatic compaction failed: You've hit your monthly spend limit · raise it at https://claude.ai/settings/usage?from=cc_cli_limit_message — next drain in 1s\n" +
+    '2026-11-01T17:25:06.639Z drain: 1 pending — firing warm turn\n' +
+    '2026-11-01T17:25:06.697Z drain turn done in 0.1s\n' +
+    "2026-11-01T17:25:06.697Z drain turn error (spend_limit): Prompt is too long · automatic compaction failed: You've hit your monthly spend limit · raise it at https://claude.ai/settings/usage?from=cc_cli_limit_message — next drain in 1s\n"
+  
+      at TestContext.<anonymous> (file:///private/var/folders/g1/nj_4qy4577l_lw4kfyj06qh00000gn/T/hbar-orch-GNLRv3/a-oLcTda/work/test/turn-outcome.test.mjs:114:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+      at async Test.run (node:internal/test_runner/test:1054:7)
+      at async Promise.all (index 2)
+      at async Suite.run (node:internal/test_runner/test:1442:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:744:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: "2026-11-01T17:25:04.370Z starting warm claude (model=claude-sonnet-5)\n2026-11-01T17:25:04.382Z control endpoint on 127.0.0.1:50960/abort\n2026-11-01T17:25:06.082Z drain: 1 pending — firing warm turn\n2026-11-01T17:25:06.136Z drain turn done in 0.1s\n2026-11-01T17:25:06.137Z drain turn error (spend_limit): Prompt is too long · automatic compaction failed: You've hit your monthly spend limit · raise it at https://claude.ai/settings/usage?from=cc_cli_limit_message — next drain in 1s\n2026-11-01T17:25:06.639Z drain: 1 pending — firing warm turn\n2026-11-01T17:25:06.697Z drain turn done in 0.1s\n2026-11-01T17:25:06.697Z drain turn error (spend_limit): Prompt is too long · automatic compaction failed: You've hit your monthly spend limit · raise it at https://claude.ai/settings/usage?from=cc_cli_limit_message — next drain in 1s\n",
+    expected: /drain recovered after 2 error turn\(s\)/,
+    operator: 'match'
+  }
