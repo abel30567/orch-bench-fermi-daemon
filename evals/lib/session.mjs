@@ -6,10 +6,14 @@
 //   "session": [ { "turn": "drain", "interruptAfter": "mac_shell" }, { "turn": "stop" }, { "turn": "keepalive" } ]
 //
 // turn: drain | stop | teams | keepalive (texts below). interruptAfter: call the
-// session's interrupt() as soon as the turn calls that tool, as the control
-// endpoint's POST /abort does. That turn's turn_end is marked `interrupted: true`
-// so the runner does not count it as a harness failure.
+// session's interrupt(), as the control endpoint's POST /abort does, either as soon
+// as the turn calls that tool ("mac_shell"), or with { "afterClaim": true, "ms"?: n }
+// at the first Fermi tool call after task_claim, or n ms after the claim returned,
+// whichever comes first (so the stop lands mid-task whatever the model does next;
+// harness-internal calls such as ToolSearch do not count). That turn's turn_end is
+// marked `interrupted: true` so the runner does not count it as a harness failure.
 import { EventEmitter } from 'node:events'
+import { isFermiCall } from './assertions.mjs'
 
 // The turn texts warm-worker.mjs sends (test/evals-control.test.mjs keeps them in sync).
 export const TURNS = {
@@ -34,6 +38,24 @@ const died = (detail) => ({ type: 'turn_end', ok: false, kind: 'unknown_error', 
 function runTurn(session, text, interruptAfter, emit) {
   return new Promise((resolve) => {
     let interrupted = false
+    let claimId = null // the task_claim call, once made
+    let claimed = false // its result came back
+    let timer = null
+    const interrupt = () => {
+      if (interrupted) return
+      interrupted = true
+      session.interrupt()
+    }
+    const trigger = (ev) => {
+      if (typeof interruptAfter === 'string') return ev.type === 'tool_call' && ev.name === interruptAfter && interrupt()
+      if (!interruptAfter?.afterClaim) return
+      if (ev.type === 'tool_call' && claimed && isFermiCall(ev)) return interrupt()
+      if (ev.type === 'tool_call' && ev.name === 'task_claim' && claimId == null) claimId = ev.id
+      if (ev.type === 'tool_result' && claimId != null && ev.id === claimId && !claimed) {
+        claimed = true
+        if (interruptAfter.ms != null) timer = setTimeout(interrupt, interruptAfter.ms)
+      }
+    }
     const onEvent = (ev) => {
       if (ev.type === 'turn_end') {
         off()
@@ -42,10 +64,7 @@ function runTurn(session, text, interruptAfter, emit) {
         return resolve(end)
       }
       emit(ev)
-      if (interruptAfter && !interrupted && ev.type === 'tool_call' && ev.name === interruptAfter) {
-        interrupted = true
-        session.interrupt()
-      }
+      if (!interrupted) trigger(ev)
     }
     const onExit = (code) => {
       off()
@@ -54,6 +73,7 @@ function runTurn(session, text, interruptAfter, emit) {
       resolve(end)
     }
     const off = () => {
+      clearTimeout(timer)
       session.events.off('event', onEvent)
       session.events.off('exit', onExit)
     }

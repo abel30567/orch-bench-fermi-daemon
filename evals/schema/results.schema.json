@@ -7,7 +7,7 @@
   "items": {
     "type": "object",
     "additionalProperties": false,
-    "required": ["scenario", "attempt", "pass", "expectedOutcome", "failed", "latencyMs", "toolCalls", "tokens", "costUsd", "errorKinds"],
+    "required": ["scenario", "attempt", "pass", "expectedOutcome", "failed", "latencyMs", "toolCalls", "internalToolCalls", "tokens", "costUsd", "errorKinds"],
     "properties": {
       "scenario": { "type": "string", "minLength": 1 },
       "category": { "type": "string", "minLength": 1 },
@@ -28,6 +28,7 @@
       },
       "latencyMs": { "type": "integer", "minimum": 0 },
       "toolCalls": { "type": "array", "items": { "type": "string" } },
+      "internalToolCalls": { "description": "Names of the harness's own calls (not Fermi MCP tools), e.g. ToolSearch; never counted against maxToolCalls", "type": "array", "items": { "type": "string" } },
       "tokens": {
         "type": ["object", "null"],
         "additionalProperties": false,
