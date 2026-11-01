@@ -17,6 +17,35 @@ export function workerDir(checkout) {
   throw new Error(`no wrangler.eval.jsonc under ${checkout} (need a fermi-mcp checkout with MCP-11)`)
 }
 
+// The eval-seed.mjs fixture for a scenario (MCP-11; `conversation` is MCP-24).
+// `bindings` are channel allowlist entries ({ channel, sender_id, note? }),
+// seeded into the worker's allowlist. An inbound with `via: "task"` (a phone
+// call result, a cloud handoff: nothing a bridge webhook delivers) is seeded as
+// the newest pending task instead. `history` ({ role, text, minutes_ago? }) is
+// the inbound chat's prior transcript, seeded through the conversation store
+// under the inbound's channel, chat and sender (in a group, the group sender).
+export function seedFixture(fixtures = {}, inbound = null) {
+  const { profile, memories, skills, history } = fixtures
+  const allowlist = [...(fixtures.allowlist ?? []), ...(fixtures.bindings ?? [])]
+  const tasks = [...(fixtures.tasks ?? [])]
+  if (inbound?.via === 'task') tasks.push({ id: 'eval-inbound', channel: inbound.channel, sender: inbound.sender, chat_id: inbound.chat, payload: inbound.text })
+  return {
+    ...(profile && { profile }),
+    ...(memories && { memories }),
+    ...(skills && { skills }),
+    ...((fixtures.tasks || tasks.length) && { tasks }),
+    ...(allowlist.length && { allowlist }),
+    ...(history?.length && {
+      conversation: {
+        channel: inbound?.channel,
+        chat_id: inbound?.chat,
+        ...(inbound?.sender != null && { sender: inbound.sender }),
+        history: history.map(({ role, text, minutes_ago }) => ({ role, text, ...(minutes_ago != null && { minutes_ago }) })),
+      },
+    }),
+  }
+}
+
 export async function startWranglerTarget({ worker, env, logDir, bootTimeoutMs = 90_000 }) {
   const cwd = workerDir(worker)
   const state = mkdtempSync(join(tmpdir(), 'fermi-eval-state-'))
@@ -53,8 +82,6 @@ export async function startWranglerTarget({ worker, env, logDir, bootTimeoutMs =
   return {
     url,
     async seed(fixture) {
-      // eval-seed.mjs has no conversation section yet; failing beats grading without the history.
-      if (fixture.history) throw new Error('fixtures.history is not supported by the eval worker seed (eval-seed.mjs) yet')
       const file = join(state, 'fixture.json')
       writeFileSync(file, JSON.stringify(fixture))
       await run(process.execPath, ['scripts/eval-seed.mjs', file, '--persist-to', state, '--url', url], { cwd })
