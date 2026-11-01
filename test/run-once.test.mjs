@@ -93,6 +93,17 @@ describe('AC1: cold argv has the warm worker\'s settings surface', () => {
   })
 })
 
+describe('spawn errors land in the run log', () => {
+  test('CLAUDE_BIN=/nope: spawn error text in the log, exit 127, lane removed, no session stored', async () => {
+    const r = await runOnceCli({ args: ['--session', 'session.id'], env: { CLAUDE_BIN: '/nope' } })
+    assert.equal(r.code, 127, r.log)
+    assert.match(r.log, /^run-once: spawn error: spawn \/nope ENOENT$/m)
+    assert.doesNotMatch(r.log, /harness pid/)
+    assert.ok(r.laneGone)
+    assert.ok(!existsSync(join(r.dir, 'session.id')))
+  })
+})
+
 describe('session.id handling (heartbeat runs)', () => {
   test('an existing session.id becomes --resume', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'dmn7-s-'))

@@ -11,6 +11,9 @@
 // --session  resume the session id in this file (if any), then store the run's id there
 // --timeout-s watchdog: SIGTERM the harness after S seconds, SIGKILL 2s later (exit 124)
 //
+// If the harness binary cannot be spawned, the log gets `run-once: spawn error: <message>`
+// and the exit code is 127.
+//
 // Runs in the current directory (poll.sh cds to the daemon home first). The prompt is
 // rendered with the local.json overlay next to it (lib/prompt.mjs).
 
@@ -64,7 +67,7 @@ const run = harness.runOnce({
   settingSources: SETTING_SOURCES,
   resume: resume || undefined,
 })
-note(`harness pid ${run.pid}`)
+if (run.pid) note(`harness pid ${run.pid}`)
 
 let sessionId = null
 run.events.on('raw', (line) => {
@@ -96,9 +99,15 @@ const watchdog =
     killTimer = setTimeout(() => run.close('SIGKILL'), KILL_GRACE_MS)
   }, Number(o['timeout-s']) * 1000)
 
-const { code } = await run.done
+const { code, error } = await run.done
 clearTimeout(watchdog)
 clearTimeout(killTimer)
-if (o.session && sessionId && !timedOut) writeFileSync(o.session, sessionId + '\n')
-note(`exit ${timedOut ? 'watchdog' : code}`)
-out.end(() => process.exit(timedOut ? 124 : (code ?? 1)))
+// The harness could not be spawned (e.g. ENOENT): log why, exit 127 like a shell's "command not found".
+if (error) {
+  note(`spawn error: ${error.message}`)
+  out.end(() => process.exit(127))
+} else {
+  if (o.session && sessionId && !timedOut) writeFileSync(o.session, sessionId + '\n')
+  note(`exit ${timedOut ? 'watchdog' : code}`)
+  out.end(() => process.exit(timedOut ? 124 : (code ?? 1)))
+}
