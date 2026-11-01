@@ -7,9 +7,13 @@
 //
 // turn: drain | stop | teams | keepalive (texts below). interruptAfter: call the
 // session's interrupt() as soon as the turn calls that tool, as the control
-// endpoint's POST /abort does. That turn's turn_end is marked `interrupted: true`
-// so the runner does not count it as a harness failure.
+// endpoint's POST /abort does. It may instead be { "afterClaim": true, "ms"?: n }:
+// interrupt on the first Fermi tool call after the turn's task_claim (whatever the
+// model chose to do next), or n ms into the turn, whichever comes first. That
+// turn's turn_end is marked `interrupted: true` so the runner does not count it
+// as a harness failure.
 import { EventEmitter } from 'node:events'
+import { isFermiCall } from './assertions.mjs'
 
 // The turn texts warm-worker.mjs sends (test/evals-control.test.mjs keeps them in sync).
 export const TURNS = {
@@ -34,6 +38,21 @@ const died = (detail) => ({ type: 'turn_end', ok: false, kind: 'unknown_error', 
 function runTurn(session, text, interruptAfter, emit) {
   return new Promise((resolve) => {
     let interrupted = false
+    let claimed = false
+    const stop = () => {
+      if (interrupted) return
+      interrupted = true
+      session.interrupt()
+    }
+    const timer = interruptAfter?.ms != null ? setTimeout(stop, interruptAfter.ms) : null
+    // Does this tool call fire the stop?
+    const fires = (ev) => {
+      if (typeof interruptAfter === 'string') return ev.name === interruptAfter
+      if (!interruptAfter?.afterClaim || !isFermiCall(ev)) return false
+      if (claimed) return true
+      claimed = ev.name === 'task_claim'
+      return false
+    }
     const onEvent = (ev) => {
       if (ev.type === 'turn_end') {
         off()
@@ -42,10 +61,7 @@ function runTurn(session, text, interruptAfter, emit) {
         return resolve(end)
       }
       emit(ev)
-      if (interruptAfter && !interrupted && ev.type === 'tool_call' && ev.name === interruptAfter) {
-        interrupted = true
-        session.interrupt()
-      }
+      if (interruptAfter && !interrupted && ev.type === 'tool_call' && fires(ev)) stop()
     }
     const onExit = (code) => {
       off()
@@ -54,6 +70,7 @@ function runTurn(session, text, interruptAfter, emit) {
       resolve(end)
     }
     const off = () => {
+      clearTimeout(timer)
       session.events.off('event', onEvent)
       session.events.off('exit', onExit)
     }
