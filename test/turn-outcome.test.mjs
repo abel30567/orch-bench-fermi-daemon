@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { classifyResult, parseResetMs, Backoff, chatFromEvent } from '../lib/turn-outcome.mjs'
-import { ROOT, runWorker, sim } from './run-worker.mjs'
+import { ROOT, runWorker, sim, until, fakeRecords } from './run-worker.mjs'
 
 const FIXTURE = join(ROOT, 'test/fixtures/blocking-limit-result.json')
 const fixture = JSON.parse(readFileSync(FIXTURE, 'utf8'))
@@ -110,7 +110,10 @@ describe('warm-worker with a failing harness', { concurrency: true }, () => {
   })
 
   test('a successful turn after errors resets the backoff and drains normally', async () => {
-    const { drains, log } = await runWorker({ result: noResetTime, errors: 2, durationMs: sim(180_000) })
+    // Run until recovery plus 5 more drains have happened (not a fixed window: slow under load).
+    const recovered = ({ log, home }) =>
+      until(() => /drain recovered/.test(log()) && fakeRecords(home).filter((e) => e.drain).length >= 7, 30000).catch(() => {})
+    const { drains, log } = await runWorker({ result: noResetTime, errors: 2, durationMs: sim(180_000), act: recovered })
     assert.match(log, /drain recovered after 2 error turn\(s\)/)
     const after = drains.slice(2) // turns from the first success on
     assert.ok(after.length >= 5, `${after.length} drain turns after recovery\n${log}`)
