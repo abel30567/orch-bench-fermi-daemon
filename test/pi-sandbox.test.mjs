@@ -1,12 +1,10 @@
 // pr-60: the pi adapter's eval mode runs pi in a sandboxed HOME that only knows
 // the localhost eval worker, with a temporary copy of auth.json.
-import { spawn } from 'node:child_process'
 import { test, describe, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { piMcpConfig, removeOnExit, runOnce, startSession } from '../harness/pi.mjs'
 import { runAttempt } from '../evals/lib/runner.mjs'
 import { loadScenario } from '../evals/lib/scenario.mjs'
@@ -99,61 +97,44 @@ describe('pr-60: pi eval mode', () => {
     assert.equal(existsSync(join(sandboxHome, '.pi', 'agent', 'auth.json')), false)
   })
 
-  // An attempt (holding a removeOnExit'd sandbox HOME like the runner) with a pi
-  // that hangs, interrupted mid-attempt. In-process, by calling the listener that
-  // removeOnExit installed: a parent process per case slows the suite's timing tests.
-  for (const how of ['SIGINT', 'SIGTERM', 'SIGHUP', 'exit']) {
-    test(`an attempt interrupted by ${how} removes the sandbox auth.json and HOME`, async (t) => {
-      const d = tmp()
-      const sandboxHome = join(d, 'home')
-      const hang = join(d, 'hang-pi')
-      writeFileSync(hang, '#!/bin/sh\nexec cat >/dev/null\n') // cat ends on stdin EOF
-      chmodSync(hang, 0o755)
-      const evs = ['exit', 'SIGINT', 'SIGTERM', 'SIGHUP']
-      const before = Object.fromEntries(evs.map((e) => [e, process.listeners(e)]))
-      const keep = () => {} // another listener, so the handler does not re-raise the signal at this test process
-      if (how !== 'exit') process.on(how, keep)
-      t.after(() => {
-        for (const e of evs) for (const l of process.listeners(e)) if (!before[e].includes(l)) process.off(e, l)
-      })
-      mkdirSync(sandboxHome)
-      const done = removeOnExit(sandboxHome)
-      const run = runOnce({ bin: hang, prompt: 'x', mcpConfig: LOCAL, sandboxHome })
-      const exited = new Promise((r) => run.events.once('exit', r))
-      t.after(done)
-      const auth = join(sandboxHome, '.pi', 'agent', 'auth.json')
-      assert.equal(readFileSync(auth, 'utf8'), AUTH) // the copy is in place mid-attempt
-      const added = process.listeners(how).filter((l) => !before[how].includes(l) && l !== keep)
-      assert.equal(added.length, 1)
-      added[0](how === 'exit' ? 0 : how)
-      assert.equal(existsSync(auth), false)
-      assert.equal(existsSync(sandboxHome), false)
-      run.close('SIGKILL')
-      await exited
-    })
-  }
-
-  // The one real process: after the sweep, a signal nobody else listens for still
-  // terminates the process with that signal (the default action).
-  test('a parent interrupted by SIGINT removes its sandbox HOME and still dies by SIGINT', async () => {
+  // removeOnExit's listeners, called in-process with process.kill mocked: a parent
+  // process per case slows the suite's timing tests. SIGINT interrupts an attempt
+  // with a pi that hangs; the other cases hold a registered sandbox HOME.
+  test('an attempt interrupted by SIGINT, SIGTERM, SIGHUP or exit removes the sandbox auth.json and HOME', async (t) => {
     const d = tmp()
-    const sandboxHome = join(d, 'home')
-    const parent = join(d, 'parent.mjs')
-    writeFileSync(parent, `
-import { mkdirSync } from 'node:fs'
-import { removeOnExit } from ${JSON.stringify(pathToFileURL(join(ROOT, 'harness/pi.mjs')).href)}
-mkdirSync(process.argv[2])
-removeOnExit(process.argv[2])
-process.stdout.write('ready\\n')
-setTimeout(() => {}, 15_000)
-`)
-    const p = spawn(process.execPath, [parent, sandboxHome], { stdio: ['ignore', 'pipe', 'ignore'] })
-    const ended = new Promise((r) => p.once('exit', (code, signal) => r({ code, signal })))
-    await new Promise((r) => p.stdout.once('data', r))
-    assert.equal(existsSync(sandboxHome), true)
-    p.kill('SIGINT')
-    assert.deepEqual(await ended, { code: null, signal: 'SIGINT' })
-    assert.equal(existsSync(sandboxHome), false)
+    const hang = join(d, 'hang-pi')
+    writeFileSync(hang, '#!/bin/sh\nexec cat >/dev/null\n') // cat ends on stdin EOF
+    chmodSync(hang, 0o755)
+    const evs = ['SIGINT', 'SIGTERM', 'SIGHUP', 'exit']
+    const before = Object.fromEntries(evs.map((e) => [e, process.listeners(e)]))
+    for (const s of evs.slice(0, 3)) for (const l of before[s]) process.off(s, l)
+    t.after(() => {
+      for (const e of evs) for (const l of process.listeners(e)) if (!before[e].includes(l)) process.off(e, l)
+      for (const s of evs.slice(0, 3)) for (const l of before[s]) process.on(s, l)
+    })
+    const kills = []
+    t.mock.method(process, 'kill', (...a) => kills.push(a))
+    const own = () => {} // the process's own SIGTERM listener: no re-raise
+    process.on('SIGTERM', own)
+    const added = (e) => process.listeners(e).filter((l) => !before[e].includes(l) && l !== own)
+    for (const how of evs) {
+      const sandboxHome = join(d, how)
+      mkdirSync(sandboxHome)
+      const auth = join(sandboxHome, '.pi', 'agent', 'auth.json')
+      // The attempt registers its auth.json itself; the caller (the runner) registers the HOME.
+      const run = how === 'SIGINT' && runOnce({ bin: hang, prompt: 'x', mcpConfig: LOCAL, sandboxHome })
+      if (run) {
+        const exited = new Promise((r) => run.events.once('exit', r))
+        t.after(() => (run.close('SIGKILL'), exited)) // also after a failed assertion, so the hanging pi cannot stall the suite
+        assert.equal(readFileSync(auth, 'utf8'), AUTH) // the copy is in place mid-attempt
+      } else t.after(removeOnExit(sandboxHome))
+      assert.equal(added(how).length, 1, how)
+      kills.length = 0
+      added(how)[0](how === 'exit' ? 0 : how)
+      assert.equal(existsSync(run ? auth : sandboxHome), false, how)
+      // A signal nobody else listens for is re-raised, so its default action (termination) still applies.
+      assert.deepEqual(kills, how === 'SIGINT' || how === 'SIGHUP' ? [[process.pid, how]] : [], how)
+    }
   })
 
   test('a non-localhost or url-less MCP server refuses to start, before pi or the sandbox', () => {
