@@ -59,6 +59,14 @@ attempt. `<out>/summary.json` has the totals and the pass rate per scenario.
 `MACOS_MCP_URL` or any `*_API_BASE` in its environment is not a localhost URL.
 It also checks every URL it hands out (worker env, target, MCP config).
 
+**pi.** pi reads MCP servers only from its agent dir, so each attempt gives it a
+temporary `HOME`. `harness/pi.mjs` writes `<sandboxHome>/.pi/agent/mcp.json` with
+the eval proxy as the only server and refuses to start on a non-localhost or
+url-less server. pi can log in only from `auth.json`, so the real
+`~/.pi/agent/auth.json` is copied there for the attempt (the credential-isolation
+blocker in `harness/pi.mjs`). The copy is removed when pi exits and the sandbox
+when the attempt ends.
+
 ## Scenario format (JSON)
 
 ```jsonc
