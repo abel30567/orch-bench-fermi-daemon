@@ -1,6 +1,6 @@
 {
   "name": "drain-stop-on-empty",
-  "description": "After the last task the drain makes one empty task_claim and stops.",
+  "description": "After the last task the drain makes one empty task_claim and stops. Claude Code's ToolSearch (loading the deferred Fermi tools) is harness-internal and does not count against maxToolCalls.",
   "fixtures": {
     "bindings": [
       {
@@ -34,6 +34,12 @@
   ],
   "fake": {
     "script": [
+      {
+        "internal": "ToolSearch",
+        "args": {
+          "query": "select:mcp__fermi__task_claim,mcp__fermi__context_bootstrap,mcp__fermi__channel_send,mcp__fermi__task_complete"
+        }
+      },
       {
         "tool": "task_claim",
         "args": {

@@ -11,6 +11,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { loadHarness } from '../harness/index.mjs'
+import { internalToolCalls } from './lib/assertions.mjs'
 import { assertLocalUrls } from './lib/net.mjs'
 import { runAttempt, summarize } from './lib/runner.mjs'
 import { expandScenarios, expandVariants, loadScenario } from './lib/scenario.mjs'
@@ -102,6 +103,8 @@ async function main() {
   for (const scenario of scenarios)
     for (let attempt = 1; attempt <= opts.k; attempt++) {
       const r = await runAttempt({ scenario, attempt, harness, model: opts.model, worker: opts.worker, timeoutMs: opts.timeoutMs, outDir: out })
+      // The harness's own calls (ToolSearch loading deferred tools, …), kept out of maxToolCalls but reported.
+      r.internalToolCalls = internalToolCalls(r.toolCalls.map((name) => ({ type: 'tool_call', name })))
       results.push(r)
       const tag = r.pass ? 'PASS' : r.expectedOutcome === 'fail' ? 'FAIL (expected)' : 'FAIL'
       console.log(`${tag} ${r.scenario} #${attempt} ${r.latencyMs}ms ${r.failed.map((f) => f.message).join(' | ')}`.trimEnd())

@@ -1,6 +1,6 @@
 {
   "name": "drain-multi-task-until-empty",
-  "description": "Three pending tasks are claimed one at a time and each gets its own reply and task_complete, until task_claim is empty.",
+  "description": "Three pending tasks are claimed one at a time and each gets its own reply and task_complete, until task_claim is empty. Claude Code's ToolSearch (loading the deferred Fermi tools) is harness-internal and does not count against maxToolCalls.",
   "fixtures": {
     "bindings": [
       {
@@ -82,6 +82,12 @@
   ],
   "fake": {
     "script": [
+      {
+        "internal": "ToolSearch",
+        "args": {
+          "query": "select:mcp__fermi__task_claim,mcp__fermi__context_bootstrap,mcp__fermi__channel_send,mcp__fermi__task_complete"
+        }
+      },
       {
         "tool": "task_claim",
         "args": {
