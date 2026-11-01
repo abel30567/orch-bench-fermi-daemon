@@ -12,11 +12,14 @@
 //     $FAKE_DIR/cred.json, run a bash-tool child (inheriting the environment, as
 //     pi's bash tool does) that dumps its environment to $FAKE_DIR/child-env.json,
 //     and stream that tool execution.
+//   {"$fake":"home"}           config probe: record to $FAKE_DIR/home.json the
+//     HOME, the agent dir pi resolves (PI_CODING_AGENT_DIR, else ~/.pi/agent)
+//     and the mcp.json and auth.json pi would load from it (null if missing).
 // An abort ends the in-flight run the way pi does: an aborted assistant message,
 // then agent_end and agent_settled, then the abort response.
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createInterface } from 'node:readline'
@@ -37,6 +40,7 @@ async function replay(name) {
     else if (d.$fake === 'hang') await new Promise(() => {})
     else if (d.$fake === 'exit') process.exit(d.code)
     else if (d.$fake === 'tool_env') toolEnv()
+    else if (d.$fake === 'home') home()
   }
   if (run === t) run = null
 }
@@ -50,6 +54,13 @@ function toolEnv() {
   writeFileSync(join(dir, 'child-env.json'), env)
   out({ type: 'tool_execution_start', toolCallId: 'toolu_env', toolName: 'bash', args: { command: 'env' } })
   out({ type: 'tool_execution_end', toolCallId: 'toolu_env', toolName: 'bash', result: { content: [{ type: 'text', text: env }], details: {} }, isError: false })
+}
+
+function home() {
+  const agentDir = process.env.PI_CODING_AGENT_DIR || join(process.env.HOME, '.pi', 'agent')
+  const read = (f) => (existsSync(join(agentDir, f)) ? readFileSync(join(agentDir, f), 'utf8') : null)
+  const mcp = read('mcp.json')
+  writeFileSync(join(process.env.FAKE_DIR, 'home.json'), JSON.stringify({ home: process.env.HOME, agentDir, mcp: mcp && JSON.parse(mcp), auth: read('auth.json') }))
 }
 
 const aborted = {
