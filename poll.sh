@@ -11,7 +11,7 @@ DAEMON_HOME="$HOME/fermi-daemon"
 cd "$DAEMON_HOME" || exit 1
 # NOTE: do not export ANTHROPIC_API_KEY here — claude prefers it over the
 # Max login and it disables claude.ai connectors (Fermi tools) entirely.
-source ./.env # FERMI_URL, FERMI_BEARER_TOKEN (+ optional overrides below)
+source ./.env # FERMI_URL, FERMI_BEARER_TOKEN, NODE_BIN (+ optional overrides below)
 
 MAX_CONCURRENT="${MAX_CONCURRENT:-5}"        # parallel drain lanes
 MAX_RUN_SECONDS="${MAX_RUN_SECONDS:-1200}"   # per-lane watchdog (20min). Long enough for real
@@ -28,6 +28,28 @@ mkdir -p "$LANE_DIR"
 rm -f "$DAEMON_HOME/run.lock" 2>/dev/null # legacy single-lock cleanup
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >>logs/poll.log }
+
+# The cold path is the fallback for when the warm worker is down, so it must
+# not fail silently: resolve node ($NODE_BIN, else PATH) and require >= 22
+# before spawning bin/run-once.mjs. On failure log one ERROR line and exit 1.
+NODE_MIN_MAJOR=22
+require_node() {
+	local prompt_file="$1"
+	local node="${NODE_BIN:-$(command -v node)}"
+	local hint="bin/run-once.mjs needs node >= $NODE_MIN_MAJOR (set NODE_BIN in .env) — not spawning $prompt_file"
+	local version
+	if [[ -z "$node" ]] || ! version=$("$node" --version 2>/dev/null); then
+		log "ERROR: node '${node:-node}' not found; $hint"
+		exit 1
+	fi
+	version="${version#v}"
+	local major="${version%%.*}"
+	if [[ "$major" != <-> ]] || (( major < NODE_MIN_MAJOR )); then
+		log "ERROR: node '$node' is v$version; $hint"
+		exit 1
+	fi
+	NODE="$node"
+}
 
 now=$(date +%s)
 
@@ -81,11 +103,13 @@ acquire_lane() {
 
 # Detached nohup spawn from the clean dir (EINTR-safe) of bin/run-once.mjs,
 # which runs the harness, enforces the MAX_RUN_SECONDS watchdog and removes the
-# lane on exit. Only heartbeat runs pass --session (resume from and store
+# lane on exit; its own stdout/stderr (e.g. a crash) go to the run log too.
+# Only heartbeat runs pass --session (resume from and store
 # session.id): concurrent drain runs must not race on it.
 spawn_run() {
 	local prompt_file="$1"
 	shift
+	require_node "$prompt_file"
 	local lane
 	lane=$(acquire_lane) || { log "all $MAX_CONCURRENT lanes busy — deferring $prompt_file"; return 1; }
 	local ts
@@ -95,14 +119,14 @@ spawn_run() {
 	if [[ "$prompt_file" == drain.md ]]; then
 		nohup python3 "$DAEMON_HOME/narrator.py" "runs/$ts.log" >/dev/null 2>&1 &
 	fi
-	nohup node "$DAEMON_HOME/bin/run-once.mjs" \
+	nohup "$NODE" "$DAEMON_HOME/bin/run-once.mjs" \
 		--prompt "prompts/$prompt_file" \
 		--log "runs/$ts.log" \
 		--lane "$lane" \
 		--model "$MODEL" \
 		--max-turns "$MAX_TURNS" \
 		--timeout-s "$MAX_RUN_SECONDS" \
-		"$@" >/dev/null 2>&1 &
+		"$@" >>"runs/$ts.log" 2>&1 &
 	echo $! >"$lane/pid"
 	log "spawned $prompt_file in lane ${lane:t} (pid $(cat "$lane/pid"), log runs/$ts.log)"
 }
