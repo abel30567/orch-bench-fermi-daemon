@@ -15,7 +15,11 @@
 //                copies the real ~/.pi/agent/auth.json into <agent-dir> for the
 //                inference login (see the credential-isolation blocker below);
 //                that copy is deleted when the pi process ends. The real
-//                ~/.pi/agent/mcp.json is never read.
+//                ~/.pi/agent/mcp.json is never read. A sandboxHome that resolves
+//                (symlinks, trailing slash, `.`) to the real HOME or an ancestor
+//                of it, or whose agent dir is the real agent dir, is refused:
+//                the adapter would overwrite the real mcp.json and delete the
+//                real auth.json.
 // allowedTools is ignored and runOnce's skipPermissions/maxTurns have no pi
 // equivalent. tokenFd, configDir and scrubSubprocessEnv are refused (they
 // promise an isolation pi cannot give; see below), and so is mcpConfig without
@@ -45,9 +49,9 @@
 
 import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join, resolve, sep } from 'node:path'
 import { isLocalUrl } from '../evals/lib/net.mjs'
 import { classifyResult } from '../lib/turn-outcome.mjs'
 import { bareToolName } from './index.mjs'
@@ -69,6 +73,32 @@ export function piMcpConfig(config) {
   return { mcpServers: Object.fromEntries(servers.map(([k, s]) => [k, { url: s.url, ...(s.headers && { headers: s.headers }) }])) }
 }
 
+// realpath for a path that may not exist yet: the nearest existing ancestor's
+// realpath plus the rest.
+function realish(p) {
+  p = resolve(p)
+  try {
+    return realpathSync(p)
+  } catch {
+    const parent = dirname(p)
+    return parent === p ? p : join(realish(parent), basename(p))
+  }
+}
+
+const within = (child, parent) => child === parent || child.startsWith(parent.endsWith(sep) ? parent : parent + sep)
+
+// Refuse a sandboxHome that is (or contains) the real HOME, or whose agent dir is
+// the real one: the sandbox writes mcp.json there and deletes auth.json after.
+function assertSeparate(sandboxHome, agentDir) {
+  const home = realish(homedir())
+  const sandbox = realish(sandboxHome)
+  const realAgentDirs = [join(homedir(), '.pi', 'agent'), process.env.PI_CODING_AGENT_DIR].filter(Boolean).map(realish)
+  const agent = realish(agentDir)
+  if (within(home, sandbox) || realAgentDirs.some((d) => within(d, agent) || within(agent, d))) {
+    throw new Error(`pi adapter: refusing to start: sandboxHome ${sandboxHome} is not separate from the real HOME/agent dir (see harness/pi.mjs)`)
+  }
+}
+
 // Eval mode: the sandbox agent dir with the eval mcp.json and a copy of the
 // login. Returns the env overrides and the cleanup for the copy.
 function prepareSandbox({ mcpConfig, sandboxHome }) {
@@ -76,6 +106,7 @@ function prepareSandbox({ mcpConfig, sandboxHome }) {
   if (!sandboxHome) throw new Error('pi adapter: mcpConfig without sandboxHome would load the real ~/.pi/agent/mcp.json (see harness/pi.mjs)')
   const mcp = piMcpConfig(mcpConfig)
   const agentDir = join(sandboxHome, '.pi', 'agent')
+  assertSeparate(sandboxHome, agentDir)
   mkdirSync(agentDir, { recursive: true })
   writeFileSync(join(agentDir, 'mcp.json'), JSON.stringify(mcp, null, 2))
   const realAuth = join(homedir(), '.pi', 'agent', 'auth.json')

@@ -3,7 +3,7 @@
 // ~/.pi/agent (mcp.json pointing at production) is never used.
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ROOT } from './run-worker.mjs'
@@ -115,6 +115,34 @@ describe('pr-60 AC3: a non-localhost URL in the MCP config refuses to start', ()
       assert.throws(() => pi.piMcpConfig(mcpConfig), /^Error: refusing to start: non-localhost/)
       assert.throws(() => pi.runOnce({ bin, prompt: 'home', mcpConfig, sandboxHome }), /refusing to start: non-localhost/)
       assert.equal(existsSync(join(sandboxHome, '.pi')), false, 'nothing written, no login copied')
+    })
+  }
+})
+
+describe('pr-60 F1: a sandboxHome that is not separate from the real HOME refuses to start', () => {
+  const link = join(tmp(), 'home-link')
+  symlinkSync(realHome, link)
+  const parentOfHome = join(realHome, '..')
+  const agentLink = tmp()
+  mkdirSync(join(agentLink, '.pi'))
+  symlinkSync(join(realHome, '.pi/agent'), join(agentLink, '.pi/agent'))
+  for (const [label, sandboxHome] of [
+    ['the real HOME', realHome],
+    ['trailing slash', realHome + '/'],
+    ['HOME/.', join(realHome, '.') + '/.'],
+    ['a symlink to HOME', link],
+    ['an ancestor of HOME', parentOfHome],
+    ['an agent dir symlinked to the real one', agentLink],
+  ]) {
+    test(label, () => {
+      assert.throws(
+        () => pi.runOnce({ bin, prompt: 'home', mcpConfig: evalConfig(), sandboxHome, env: { FAKE_DIR: tmp() } }),
+        /refusing to start: sandboxHome .* is not separate/,
+      )
+      assert.equal(readFileSync(join(realHome, '.pi/agent/auth.json'), 'utf8'), REAL_AUTH)
+      chmodSync(realMcp, 0o600)
+      assert.match(readFileSync(realMcp, 'utf8'), /fermi\.example\.workers\.dev/)
+      chmodSync(realMcp, 0o000)
     })
   }
 })
