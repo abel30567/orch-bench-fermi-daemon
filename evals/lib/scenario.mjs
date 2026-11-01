@@ -55,6 +55,9 @@ export function loadScenario(file) {
   const sess = s.session
   if (Array.isArray(sess) ? !sess.length || sess.some((t) => !TURNS[t?.turn]) : sess != null && (typeof sess !== 'object' || ['tasks', 'redrain'].some((k) => sess[k] != null && !(Number.isInteger(sess[k]) && sess[k] >= 0))))
     errs.push(`session must be a non-empty list of { turn: ${Object.keys(TURNS).join(' | ')}, interruptAfter? } or { tasks?, redrain? } with non-negative integers`)
+  const trigger = (t) => t == null || (typeof t === 'string' && t) || (t && typeof t === 'object' && typeof t.firstCallAfter === 'string' && t.firstCallAfter && (t.ms == null || (Number.isInteger(t.ms) && t.ms >= 0)))
+  if (Array.isArray(sess) && sess.some((t) => !trigger(t?.interruptAfter)))
+    errs.push('interruptAfter must be a tool name or { firstCallAfter: "<tool>", ms?: non-negative integer }')
   if (inb?.via != null && !['webhook', 'task'].includes(inb.via)) errs.push('inbound.via must be "webhook" or "task"')
   if (s.variants != null) {
     const names = (Array.isArray(s.variants) ? s.variants : []).map((v) => v?.name)

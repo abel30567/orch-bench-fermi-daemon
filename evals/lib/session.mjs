@@ -6,10 +6,14 @@
 //   "session": [ { "turn": "drain", "interruptAfter": "mac_shell" }, { "turn": "stop" }, { "turn": "keepalive" } ]
 //
 // turn: drain | stop | teams | keepalive (texts below). interruptAfter: call the
-// session's interrupt() as soon as the turn calls that tool, as the control
-// endpoint's POST /abort does. That turn's turn_end is marked `interrupted: true`
-// so the runner does not count it as a harness failure.
+// session's interrupt() as the control endpoint's POST /abort does, either as soon
+// as the turn calls the named tool ("mac_shell") or, with
+// { "firstCallAfter": "task_claim", "ms"?: n }, on the first Fermi tool call after
+// that tool's call, or n ms after its result, whichever comes first (so the stop
+// does not depend on which tool the model reaches for next). That turn's turn_end
+// is marked `interrupted: true` so the runner does not count it as a harness failure.
 import { EventEmitter } from 'node:events'
+import { isFermiCall } from './assertions.mjs'
 
 // The turn texts warm-worker.mjs sends (test/evals-control.test.mjs keeps them in sync).
 export const TURNS = {
@@ -32,22 +36,40 @@ const died = (detail) => ({ type: 'turn_end', ok: false, kind: 'unknown_error', 
 
 // One turn: send `text`, forward its events, interrupt on `interruptAfter`; resolves with its turn_end.
 function runTurn(session, text, interruptAfter, emit) {
+  const trigger = typeof interruptAfter === 'string' ? { tool: interruptAfter } : interruptAfter
   return new Promise((resolve) => {
     let interrupted = false
+    let armedBy = null // the id of the `firstCallAfter` call, once seen
+    let timer
+    const interrupt = () => {
+      if (interrupted) return
+      interrupted = true
+      clearTimeout(timer)
+      session.interrupt()
+    }
     const onEvent = (ev) => {
       if (ev.type === 'turn_end') {
+        clearTimeout(timer)
         off()
         const end = interrupted ? { ...ev, interrupted: true } : ev
         emit(end)
         return resolve(end)
       }
       emit(ev)
-      if (interruptAfter && !interrupted && ev.type === 'tool_call' && ev.name === interruptAfter) {
-        interrupted = true
-        session.interrupt()
+      if (!trigger || interrupted) return
+      if (trigger.tool) {
+        if (ev.type === 'tool_call' && ev.name === trigger.tool) interrupt()
+        return
+      }
+      if (ev.type === 'tool_call' && isFermiCall(ev)) {
+        if (armedBy) interrupt()
+        else if (ev.name === trigger.firstCallAfter) armedBy = ev.id
+      } else if (ev.type === 'tool_result' && armedBy && ev.id === armedBy && trigger.ms != null && timer == null) {
+        timer = setTimeout(interrupt, trigger.ms)
       }
     }
     const onExit = (code) => {
+      clearTimeout(timer)
       off()
       const end = died(`session exited (${code}) mid-turn`)
       emit(end)

@@ -8,9 +8,10 @@
 // Scenarios with `"schedule": "weekly"` (the soak) are skipped unless --weekly is given.
 // Exit 0 when every attempt's outcome is the expected one, 1 otherwise, 2 on a
 // usage error or a non-localhost URL.
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { loadHarness } from '../harness/index.mjs'
+import { internalToolCalls } from './lib/assertions.mjs'
 import { assertLocalUrls } from './lib/net.mjs'
 import { runAttempt, summarize } from './lib/runner.mjs'
 import { expandScenarios, expandVariants, loadScenario } from './lib/scenario.mjs'
@@ -101,7 +102,7 @@ async function main() {
   const results = []
   for (const scenario of scenarios)
     for (let attempt = 1; attempt <= opts.k; attempt++) {
-      const r = await runAttempt({ scenario, attempt, harness, model: opts.model, worker: opts.worker, timeoutMs: opts.timeoutMs, outDir: out })
+      const r = withInternalCalls(await runAttempt({ scenario, attempt, harness, model: opts.model, worker: opts.worker, timeoutMs: opts.timeoutMs, outDir: out }), out)
       results.push(r)
       const tag = r.pass ? 'PASS' : r.expectedOutcome === 'fail' ? 'FAIL (expected)' : 'FAIL'
       console.log(`${tag} ${r.scenario} #${attempt} ${r.latencyMs}ms ${r.failed.map((f) => f.message).join(' | ')}`.trimEnd())
@@ -119,6 +120,16 @@ async function main() {
   writeFileSync(join(out, 'summary.json'), JSON.stringify(summary, null, 2) + '\n')
   console.log(`${summary.passed}/${summary.attempts} passed, ${summary.expectedFailures} expected failure(s), ${summary.unexpected.length} unexpected, ${skipped.length} skipped → ${out}`)
   return summary.ok ? 0 : 1
+}
+
+// The harness's own tool calls (ToolSearch, Bash, …) from the attempt's trace, next to
+// toolCalls, so the cost of e.g. deferred tool loading shows in the comparison.
+function withInternalCalls(r, out) {
+  const file = join(out, r.scenario, String(r.attempt), 'trace.jsonl')
+  const trace = existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []
+  const entries = Object.entries(r)
+  entries.splice(entries.findIndex(([k]) => k === 'toolCalls') + 1, 0, ['internalToolCalls', internalToolCalls(trace)])
+  return Object.fromEntries(entries)
 }
 
 process.exitCode = await main()
