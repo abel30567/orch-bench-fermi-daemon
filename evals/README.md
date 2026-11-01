@@ -143,6 +143,19 @@ scenarios carry `"harnesses": ["fake"]` until a sandboxed shell exists (DMN-22).
 A scenario whose `harnesses` excludes `--harness` is skipped, not failed, and
 listed under `skipped` in `summary.json`.
 
+## pi: sandbox HOME
+
+pi reads its MCP servers and login from `~/.pi/agent`, and the owner's real
+`mcp.json` there points at production Fermi. So `--harness pi` runs each attempt
+with a throwaway `sandboxHome` (a temp dir, removed afterwards; a minimal
+stand-in until the DMN-22 sandbox lands). The adapter launches pi with
+`HOME=<sandboxHome>` and `PI_CODING_AGENT_DIR=<sandboxHome>/.pi/agent`, writes
+there an `mcp.json` translated from the runner's MCP config (`piMcpConfig`),
+and refuses to start if any server is not a localhost URL. For inference it
+copies the real `~/.pi/agent/auth.json` into the sandbox and deletes the copy
+when pi exits. That copy is readable by pi's tools during the attempt, which is
+the known credential-isolation blocker in `harness/pi.mjs`.
+
 ## The fake harness
 
 `--harness fake` (`harness/fake.mjs`) runs no model. It plays the scenario's
