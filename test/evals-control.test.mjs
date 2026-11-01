@@ -30,7 +30,7 @@ const runCli = (args) => {
 const NEGATIVES = {
   'cancelled-by-user-negative': ['task.status', 'argsMatch', 'outbox.count', 'argsMatch'],
   'model-switch-ordering-negative': ['order'],
-  'emergency-stop-mid-task-negative': ['task.status', 'argsMatch', 'argsMatch', 'exactlyOnce'],
+  'emergency-stop-mid-task-negative': ['task.status', 'argsMatch', 'argsMatch', 'notCalled'],
   'teams-reply-shell-negative': ['exactlyOnce', 'argsMatch', 'notCalled', 'notCalled'],
   'audio-transcribe-negative': ['argsMatch', 'order'],
   'deferred-schedule-list-negative': ['order'],
@@ -83,11 +83,55 @@ describe('session mode (evals/lib/session.mjs)', () => {
     const ends = trace.filter((e) => e.type === 'turn_end')
     assert.deepEqual(ends.map((e) => [e.ok, e.interrupted ?? false]), [[false, true], [true, false], [true, false]])
     assert.equal(trace.filter((e) => e.type === 'init').length, 1) // one session, not three
-    // The steps scripted after the interrupted mac_shell never ran.
+    // The stop fired on the first Fermi call after task_claim: the scripted ack, mac_shell and the rest never ran.
     const first = trace.slice(0, trace.indexOf(ends[0]))
     assert.equal(first.at(-1).type, 'tool_result')
-    assert.ok(!first.some((e) => e.type === 'tool_call' && e.name === 'task_complete'))
+    assert.deepEqual(first.filter((e) => e.type === 'tool_call').map((e) => e.name), ['task_claim', 'context_bootstrap'])
+    assert.ok(!trace.some((e) => e.type === 'tool_call' && e.name === 'mac_shell'))
     assert.deepEqual(trace.filter((e) => e.type === 'text').map((e) => e.text), ['OK'])
+  })
+
+  test('emergency stop: fires on the first Fermi call after the claim (a clarifying question), skipping internal calls, never needing mac_shell', async () => {
+    const base = loadScenario(join(CONTROL, 'emergency-stop-mid-task.json'))
+    const [drain, ...rest] = base.fake.turns
+    const scenario = {
+      ...base,
+      fake: {
+        turns: [
+          [
+            { internal: 'ToolSearch', args: { query: 'select:mcp__fermi__task_claim' } },
+            drain[0],
+            { internal: 'ToolSearch', args: { query: 'select:mcp__fermi__channel_send' } },
+            { tool: 'channel_send', args: { channel: '${task.channel}', chat_id: '${task.chat_id}', text: 'Which backup: full or incremental?' } },
+            { tool: 'channel_send', args: { channel: '${task.channel}', chat_id: '${task.chat_id}', text: 'never sent' } },
+          ],
+          ...rest,
+        ],
+      },
+    }
+    const out = tmp()
+    const r = await runAttempt({ scenario, attempt: 1, harness: fake, timeoutMs: 10_000, outDir: out })
+    assert.equal(r.pass, true, JSON.stringify(r.failed))
+    const trace = readTrace(out, scenario.name, '1', 'trace.jsonl')
+    const first = trace.slice(0, trace.findIndex((e) => e.type === 'turn_end'))
+    assert.deepEqual(first.filter((e) => e.type === 'tool_call').map((e) => e.name), ['ToolSearch', 'task_claim', 'ToolSearch', 'channel_send'])
+    assert.equal(trace.find((e) => e.type === 'turn_end').interrupted, true)
+  })
+
+  test('interruptAfter { ms } stops a turn that makes no tool call', async () => {
+    const base = loadScenario(join(CONTROL, 'emergency-stop-mid-task.json'))
+    const scenario = {
+      ...base,
+      session: [{ turn: 'drain', interruptAfter: { ms: 50 } }, { turn: 'keepalive' }],
+      expect: [{ notCalled: 'mac_shell' }],
+      fake: { turns: [[{ sleepMs: 200 }, { text: 'never said' }], [{ text: 'OK' }]] },
+    }
+    const out = tmp()
+    const r = await runAttempt({ scenario, attempt: 1, harness: fake, timeoutMs: 10_000, outDir: out })
+    const trace = readTrace(out, scenario.name, '1', 'trace.jsonl')
+    assert.deepEqual(trace.filter((e) => e.type === 'turn_end').map((e) => e.interrupted ?? false), [true, false])
+    assert.deepEqual(trace.filter((e) => e.type === 'text').map((e) => e.text), ['OK'])
+    assert.deepEqual(r.errorKinds, [])
   })
 
   test('the session gets the rendered drain.md as its system prompt and the warm-worker turn texts in order', async () => {
