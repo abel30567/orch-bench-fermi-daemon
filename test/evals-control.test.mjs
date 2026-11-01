@@ -30,7 +30,7 @@ const runCli = (args) => {
 const NEGATIVES = {
   'cancelled-by-user-negative': ['task.status', 'argsMatch', 'outbox.count', 'argsMatch'],
   'model-switch-ordering-negative': ['order'],
-  'emergency-stop-mid-task-negative': ['task.status', 'argsMatch', 'argsMatch', 'exactlyOnce'],
+  'emergency-stop-mid-task-negative': ['task.status', 'argsMatch', 'argsMatch'],
   'teams-reply-shell-negative': ['exactlyOnce', 'argsMatch', 'notCalled', 'notCalled'],
   'audio-transcribe-negative': ['argsMatch', 'order'],
   'deferred-schedule-list-negative': ['order'],
@@ -74,7 +74,7 @@ describe('DMN-13 AC1: the control pack passes against the fake harness, every sc
 })
 
 describe('session mode (evals/lib/session.mjs)', () => {
-  test('emergency stop: the turn is interrupted after the in-flight tool, cleanup and a later turn run in the same session', async () => {
+  test('emergency stop: the turn is interrupted after the first Fermi call after the claim, cleanup and a later turn run in the same session', async () => {
     const out = tmp()
     const scenario = loadScenario(join(CONTROL, 'emergency-stop-mid-task.json'))
     const r = await runAttempt({ scenario, attempt: 1, harness: fake, timeoutMs: 10_000, outDir: out })
