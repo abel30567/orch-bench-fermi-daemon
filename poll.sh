@@ -65,7 +65,25 @@ if ((MAX_RUNS_PER_HOUR > 0)); then
 	fi
 fi
 
-# --- 3. Lane helpers --------------------------------------------------------
+# --- 3. Node + lane helpers ------------------------------------------------
+# The cold path is the fallback for when the warm worker is down, so it must
+# never fail silently: resolve node as $NODE_BIN (from .env), else the node on
+# PATH, and refuse to spawn (one clear poll.log line, non-zero exit) unless it
+# is >= MIN_NODE_MAJOR. Echoes the node path on success.
+MIN_NODE_MAJOR=22
+resolve_node() {
+	local prompt_file="$1" node version major
+	node="${NODE_BIN:-$(command -v node 2>/dev/null)}"
+	version=$("${node:-node}" -v 2>/dev/null)
+	version="${version#v}"
+	major="${version%%.*}"
+	if [[ -z "$node" || ! "$major" == <-> ]] || (( major < MIN_NODE_MAJOR )); then
+		log "ERROR: node '${node:-node}' is v${version:-unknown}; bin/run-once.mjs needs node >= $MIN_NODE_MAJOR (set NODE_BIN in .env) — not spawning $prompt_file"
+		return 1
+	fi
+	printf '%s' "$node"
+}
+
 # Atomically claim a free lane 1..MAX_CONCURRENT via mkdir (race-safe across
 # concurrent poll.sh invocations). Echoes the lane path, or nothing if full.
 acquire_lane() {
@@ -81,11 +99,14 @@ acquire_lane() {
 
 # Detached nohup spawn from the clean dir (EINTR-safe) of bin/run-once.mjs,
 # which runs the harness, enforces the MAX_RUN_SECONDS watchdog and removes the
-# lane on exit. Only heartbeat runs pass --session (resume from and store
-# session.id): concurrent drain runs must not race on it.
+# lane on exit. Its own stdout/stderr (e.g. a crash before it opens --log) go
+# to the run's log too, never /dev/null. Only heartbeat runs pass --session
+# (resume from and store session.id): concurrent drain runs must not race on it.
 spawn_run() {
 	local prompt_file="$1"
 	shift
+	local node
+	node=$(resolve_node "$prompt_file") || exit 1
 	local lane
 	lane=$(acquire_lane) || { log "all $MAX_CONCURRENT lanes busy — deferring $prompt_file"; return 1; }
 	local ts
@@ -95,14 +116,14 @@ spawn_run() {
 	if [[ "$prompt_file" == drain.md ]]; then
 		nohup python3 "$DAEMON_HOME/narrator.py" "runs/$ts.log" >/dev/null 2>&1 &
 	fi
-	nohup node "$DAEMON_HOME/bin/run-once.mjs" \
+	nohup "$node" "$DAEMON_HOME/bin/run-once.mjs" \
 		--prompt "prompts/$prompt_file" \
 		--log "runs/$ts.log" \
 		--lane "$lane" \
 		--model "$MODEL" \
 		--max-turns "$MAX_TURNS" \
 		--timeout-s "$MAX_RUN_SECONDS" \
-		"$@" >/dev/null 2>&1 &
+		"$@" >>"runs/$ts.log" 2>&1 &
 	echo $! >"$lane/pid"
 	log "spawned $prompt_file in lane ${lane:t} (pid $(cat "$lane/pid"), log runs/$ts.log)"
 }
