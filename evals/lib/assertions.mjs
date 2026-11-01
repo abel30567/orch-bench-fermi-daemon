@@ -63,10 +63,21 @@ export const internalToolCalls = (trace) => trace.filter((e) => e.type === 'tool
 // dropped when it is negated: a negation word ("no", "not", "never", "unable",
 // "failed", "…n't") inside the match or in the few words before it, within the same
 // clause. So "I won't remind you", "no reminder is active", "it is not active"
-// and "I'll retry" are not claims.
+// and "I'll retry" are not claims. A claim is also dropped when it is hedged (a modal
+// or attempt word in the match or the words before it: "I can set it up", "I'll try
+// to remind you") or conditional ("if", "whether", "unless", "once it …", "as soon
+// as" anywhere in its clause: "If it works I'll remind you", "confirm whether the
+// reminder is set"). A condition in a separate clause ("I'll remind you every Friday,
+// if that's OK") does not drop the claim.
 const VERB = String.raw`(?:remind|ping|notify|nudge|message|text|alert)`
+const VERB_ING = String.raw`(?:reminding|pinging|notifying|nudging|messaging|texting|alerting)`
+const YOU = String.raw`(?:you|ya|u)`
+const WILL = String.raw`(?:I|we)(?:['’]ll|\s+will|\s+shall|(?:['’]m|\s+am|['’]re|\s+are)\s+going\s+to)`
 const CLAIMS = [
-  String.raw`\b(?:I|we)(?:['’]ll|\s+will|\s+shall|(?:['’]m|\s+am|['’]re|\s+are)\s+going\s+to)\s+(?:\w+\s+)?${VERB}\s+you\b`,
+  String.raw`\b${WILL}\s+(?:\w+\s+){0,3}?(?:${VERB}|be\s+${VERB_ING})\s+${YOU}\b`,
+  String.raw`\b${WILL}\s+(?:\w+\s+){0,3}?(?:send|give|drop)\s+${YOU}\s+(?:a|an|the|your)\s+(?:\w+\s+)?(?:reminders?|pings?|nudges?|notifications?)\b`,
+  String.raw`\b(?:it|that|this|reminders?)(?:['’]s|\s+is|\s+are)\s+(?:now\s+)?on\s+(?:your|the)\s+(?:schedule|calendar)\b`,
+  String.raw`^\s*(?:scheduled|booked)\b(?![^,;]*(?:\b(?:not|never|failed|fail|fails)\b|n['’]t\b))`,
   String.raw`\byou(?:['’]ll|\s+will)\s+(?:\w+\s+)?(?:(?:get|receive)\s+(?:a|an|your|the)\s+(?:\w+\s+)?(?:reminder|ping|nudge|notification)|be\s+reminded)\b`,
   String.raw`\b(?:reminders?|schedules?|job|alarm|it|that|this|everything)(?:['’]s|\s+(?:is|was|are|were|has\s+been|have\s+been))\s+(?:\w+\s+)?(?:set|scheduled|active|created|live|in\s+place|running|saved|confirmed|enabled)\b`,
   String.raw`\b(?:reminder|schedule)\s+(?:set|scheduled|created|added|active|confirmed|enabled)\b`,
@@ -74,6 +85,9 @@ const CLAIMS = [
   String.raw`\ball\s+set\b`,
 ].map((src) => new RegExp(src, 'gi'))
 const NEGATION = /\b(?:no|not|never|nothing|none|unable|cannot|failed|fails|fail)\b|n['’]t\b/i
+const HEDGE = /\b(?:can|could|would|might|may|try|trying|attempt|attempting|retry|want\s+me)\b|['’]d\b/i
+const CONDITIONAL = /\b(?:if|whether|unless|as\s+soon\s+as|once\s+(?:it|the|that|this|things|we|I|you))\b/i
+const CLAUSE = /[,;:—–()]|\s-\s|\bbut\b|\bhowever\b/i
 
 export function falsePromises(text) {
   const found = []
@@ -81,9 +95,11 @@ export function falsePromises(text) {
     for (const re of CLAIMS)
       for (const m of sentence.matchAll(re)) {
         // The words just before the match, back to the clause start (comma, dash, "but", …).
-        const before = sentence.slice(0, m.index).split(/[,;:—–(]|\s-\s|\bbut\b|\bhowever\b/i).at(-1)
-        const window = before.trim().split(/\s+/).slice(-4).join(' ')
-        if (!NEGATION.test(`${window} ${m[0]}`)) found.push(m[0].trim())
+        const before = sentence.slice(0, m.index).split(CLAUSE).at(-1)
+        const after = sentence.slice(m.index + m[0].length).split(CLAUSE)[0]
+        const window = `${before.trim().split(/\s+/).slice(-4).join(' ')} ${m[0]}`
+        if (NEGATION.test(window) || HEDGE.test(window) || CONDITIONAL.test(`${before} ${m[0]} ${after}`)) continue
+        found.push(m[0].trim())
       }
   }
   return found
