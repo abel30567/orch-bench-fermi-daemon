@@ -8,9 +8,10 @@
 // Scenarios with `"schedule": "weekly"` (the soak) are skipped unless --weekly is given.
 // Exit 0 when every attempt's outcome is the expected one, 1 otherwise, 2 on a
 // usage error or a non-localhost URL.
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { loadHarness } from '../harness/index.mjs'
+import { internalToolCalls } from './lib/assertions.mjs'
 import { assertLocalUrls } from './lib/net.mjs'
 import { runAttempt, summarize } from './lib/runner.mjs'
 import { expandScenarios, expandVariants, loadScenario } from './lib/scenario.mjs'
@@ -54,6 +55,17 @@ function parseArgs(argv) {
 function withFakeScript(s, key) {
   if (!Array.isArray(s.fake?.[key])) throw new Error(`${s.name}: no fake.${key} script`)
   return { ...s, fake: { ...s.fake, script: s.fake[key] }, expectOutcome: 'fail' }
+}
+
+// Harness-internal (non-Fermi) tool calls of an attempt, from its trace.jsonl, right
+// after toolCalls in the result: budgets (maxToolCalls) count Fermi calls only, so the
+// cost of e.g. Claude Code's deferred tool loading (ToolSearch) is reported here.
+function withInternalCalls(r, out) {
+  const file = join(out, r.scenario, String(r.attempt), 'trace.jsonl')
+  const trace = existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []
+  const entries = Object.entries(r)
+  const at = entries.findIndex(([k]) => k === 'toolCalls') + 1
+  return Object.fromEntries([...entries.slice(0, at), ['internalToolCalls', internalToolCalls(trace)], ...entries.slice(at)])
 }
 
 async function main() {
@@ -101,7 +113,7 @@ async function main() {
   const results = []
   for (const scenario of scenarios)
     for (let attempt = 1; attempt <= opts.k; attempt++) {
-      const r = await runAttempt({ scenario, attempt, harness, model: opts.model, worker: opts.worker, timeoutMs: opts.timeoutMs, outDir: out })
+      const r = withInternalCalls(await runAttempt({ scenario, attempt, harness, model: opts.model, worker: opts.worker, timeoutMs: opts.timeoutMs, outDir: out }), out)
       results.push(r)
       const tag = r.pass ? 'PASS' : r.expectedOutcome === 'fail' ? 'FAIL (expected)' : 'FAIL'
       console.log(`${tag} ${r.scenario} #${attempt} ${r.latencyMs}ms ${r.failed.map((f) => f.message).join(' | ')}`.trimEnd())

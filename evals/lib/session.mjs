@@ -6,10 +6,42 @@
 //   "session": [ { "turn": "drain", "interruptAfter": "mac_shell" }, { "turn": "stop" }, { "turn": "keepalive" } ]
 //
 // turn: drain | stop | teams | keepalive (texts below). interruptAfter: call the
-// session's interrupt() as soon as the turn calls that tool, as the control
-// endpoint's POST /abort does. That turn's turn_end is marked `interrupted: true`
-// so the runner does not count it as a harness failure.
+// session's interrupt(), as the control endpoint's POST /abort does, either
+//   "<tool>"                         as soon as the turn calls that tool, or
+//   { "callsAfterClaim": n, "ms": t } as soon as the turn makes its n-th Fermi tool
+//                                    call after its first task_claim, or t ms after
+//                                    the turn started, whichever comes first (either
+//                                    key may be left out). Harness-internal calls
+//                                    (ToolSearch, Bash) do not count.
+// That turn's turn_end is marked `interrupted: true` so the runner does not count
+// it as a harness failure.
 import { EventEmitter } from 'node:events'
+import { isFermiCall } from './assertions.mjs'
+
+// Is `interruptAfter` a valid trigger? (scenario.mjs validates with it.)
+export const validInterrupt = (x) =>
+  x == null ||
+  (typeof x === 'string' && x.length > 0) ||
+  (!!x &&
+    typeof x === 'object' &&
+    !Array.isArray(x) &&
+    Object.keys(x).length > 0 &&
+    Object.entries(x).every(([k, v]) => ['callsAfterClaim', 'ms'].includes(k) && Number.isInteger(v) && v > 0))
+
+// interruptAfter → a stateful (tool_call event) → boolean "interrupt now?".
+function trigger(interruptAfter) {
+  if (typeof interruptAfter === 'string') return (ev) => ev.name === interruptAfter
+  const n = interruptAfter?.callsAfterClaim
+  if (n == null) return () => false
+  let claimed = false
+  let after = 0
+  return (ev) => {
+    if (!isFermiCall(ev)) return false
+    if (claimed) return ++after >= n
+    if (ev.name === 'task_claim') claimed = true
+    return false
+  }
+}
 
 // The turn texts warm-worker.mjs sends (test/evals-control.test.mjs keeps them in sync).
 export const TURNS = {
@@ -34,6 +66,13 @@ const died = (detail) => ({ type: 'turn_end', ok: false, kind: 'unknown_error', 
 function runTurn(session, text, interruptAfter, emit) {
   return new Promise((resolve) => {
     let interrupted = false
+    const hit = interruptAfter ? trigger(interruptAfter) : () => false
+    const interrupt = () => {
+      if (interrupted) return
+      interrupted = true
+      session.interrupt()
+    }
+    const timer = interruptAfter?.ms ? setTimeout(interrupt, interruptAfter.ms) : null
     const onEvent = (ev) => {
       if (ev.type === 'turn_end') {
         off()
@@ -42,10 +81,7 @@ function runTurn(session, text, interruptAfter, emit) {
         return resolve(end)
       }
       emit(ev)
-      if (interruptAfter && !interrupted && ev.type === 'tool_call' && ev.name === interruptAfter) {
-        interrupted = true
-        session.interrupt()
-      }
+      if (!interrupted && ev.type === 'tool_call' && hit(ev)) interrupt()
     }
     const onExit = (code) => {
       off()
@@ -54,6 +90,7 @@ function runTurn(session, text, interruptAfter, emit) {
       resolve(end)
     }
     const off = () => {
+      clearTimeout(timer)
       session.events.off('event', onEvent)
       session.events.off('exit', onExit)
     }
