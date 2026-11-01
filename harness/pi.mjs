@@ -21,7 +21,7 @@
 // <sandboxHome>/.pi/agent/mcp.json. Every server must be a localhost URL, or the
 // adapter refuses to start. pi can only log in from <agent-dir>/auth.json, so the
 // real ~/.pi/agent/auth.json is copied into the sandbox for the attempt and
-// deleted when the process exits (part of the credential-isolation blocker below).
+// deleted when pi exits, or when this process exits or is signalled (part of the credential-isolation blocker below).
 //
 // Known gaps vs the Claude Code adapter:
 //   - No per-turn cost or session id. pi has no turn-level result record (Claude's
@@ -81,6 +81,40 @@ export function piMcpConfig(config) {
   return { mcpServers: Object.fromEntries(servers.map(([k, s]) => [k, { url: s.url, ...(s.headers && { headers: s.headers }) }])) }
 }
 
+// Paths to delete if this process ends mid-attempt (Ctrl-C, SIGTERM, SIGHUP,
+// process.exit), when the child's 'exit' and the runner's closers never run. The
+// handlers are installed only while something is registered. A signal with no
+// other listener is re-raised after the sweep, so its default action still applies.
+const live = new Set()
+const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP']
+const sweep = () => {
+  for (const p of live) rmSync(p, { recursive: true, force: true })
+  live.clear()
+}
+const release = () => {
+  process.off('exit', sweep)
+  for (const s of SIGNALS) process.off(s, onSignal)
+}
+const onSignal = (sig) => {
+  sweep()
+  release()
+  if (process.listenerCount(sig) === 0) process.kill(process.pid, sig)
+}
+
+// Registers a path for removal on process exit or a terminating signal. Returns
+// the normal cleanup, which removes it now and unregisters it (idempotent).
+export function removeOnExit(path) {
+  if (!live.size) {
+    process.on('exit', sweep)
+    for (const s of SIGNALS) process.on(s, onSignal)
+  }
+  live.add(path)
+  return () => {
+    rmSync(path, { recursive: true, force: true })
+    if (live.delete(path) && !live.size) release()
+  }
+}
+
 // Eval mode: a sandboxed agent dir with the translated mcp.json and a copy of the
 // real auth.json. Returns the env overrides and the cleanup that deletes the copy.
 function sandbox(o) {
@@ -94,11 +128,12 @@ function sandbox(o) {
   writeFileSync(join(agentDir, 'mcp.json'), JSON.stringify(mcp, null, 2) + '\n')
   const auth = join(agentDir, 'auth.json')
   const realAuth = join(homedir(), '.pi', 'agent', 'auth.json')
+  const cleanup = removeOnExit(auth)
   if (existsSync(realAuth)) {
     copyFileSync(realAuth, auth)
     chmodSync(auth, 0o600)
   }
-  return { env: { HOME: o.sandboxHome, PI_CODING_AGENT_DIR: agentDir }, cleanup: () => rmSync(auth, { force: true }) }
+  return { env: { HOME: o.sandboxHome, PI_CODING_AGENT_DIR: agentDir }, cleanup }
 }
 
 export function sessionArgs({ model, systemPrompt }) {

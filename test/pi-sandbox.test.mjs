@@ -1,10 +1,12 @@
 // pr-60: the pi adapter's eval mode runs pi in a sandboxed HOME that only knows
 // the localhost eval worker, with a temporary copy of auth.json.
+import { spawn } from 'node:child_process'
 import { test, describe, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { piMcpConfig, runOnce, startSession } from '../harness/pi.mjs'
 import { runAttempt } from '../evals/lib/runner.mjs'
 import { loadScenario } from '../evals/lib/scenario.mjs'
@@ -13,6 +15,12 @@ import * as fake from '../evals/harness/fake.mjs'
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'pr60-'))
 const LOCAL = { mcpServers: { fermi: { type: 'http', url: 'http://127.0.0.1:4100/mcp' } } }
+const until = async (cond, ms = 15000) => {
+  for (const t0 = Date.now(); !cond(); ) {
+    if (Date.now() - t0 > ms) throw new Error('timed out')
+    await new Promise((r) => setTimeout(r, 20))
+  }
+}
 const AUTH = '{"anthropic":{"type":"oauth","access":"fake-access-token"}}'
 
 // A fake pi that records what it sees on start (HOME, its agent dir, the
@@ -84,12 +92,45 @@ describe('pr-60: pi eval mode', () => {
     const probe = join(tmp(), 'probe.json')
     const s = startSession({ bin, mcpConfig: JSON.stringify(LOCAL), sandboxHome, env: { PROBE_OUT: probe } })
     const exited = new Promise((r) => s.events.on('exit', r))
-    while (!existsSync(probe)) await new Promise((r) => setTimeout(r, 20))
+    await until(() => existsSync(probe))
     assert.equal(existsSync(join(sandboxHome, '.pi', 'agent', 'auth.json')), true)
     s.close('SIGTERM')
     await exited
     assert.equal(existsSync(join(sandboxHome, '.pi', 'agent', 'auth.json')), false)
   })
+
+  // A parent that starts an attempt (like evals/run.mjs, holding a removeOnExit'd
+  // sandbox HOME like the runner) with a pi that hangs, then is interrupted.
+  for (const how of ['SIGINT', 'SIGTERM', 'exit']) {
+    test(`an attempt interrupted by ${how} removes the sandbox auth.json and HOME`, async (t) => {
+      const d = tmp()
+      const sandboxHome = join(d, 'home')
+      const hang = join(d, 'hang-pi')
+      writeFileSync(hang, `#!${process.execPath}\nprocess.stdin.resume()\nprocess.stdin.on('end', () => process.exit())\n`) // one process, no sh: the suite has timing tests
+      chmodSync(hang, 0o755)
+      const parent = join(d, 'parent.mjs')
+      writeFileSync(parent, `
+import { mkdirSync } from 'node:fs'
+import { removeOnExit, runOnce } from ${JSON.stringify(pathToFileURL(join(ROOT, 'harness/pi.mjs')).href)}
+const [bin, sandboxHome, how] = process.argv.slice(2)
+mkdirSync(sandboxHome)
+removeOnExit(sandboxHome)
+runOnce({ bin, prompt: 'x', mcpConfig: ${JSON.stringify(LOCAL)}, sandboxHome })
+process.on('SIGUSR2', () => process.exit(3)) // the 'exit' case: a plain process.exit mid-attempt
+setTimeout(() => {}, 60_000)
+`)
+      const auth = join(sandboxHome, '.pi', 'agent', 'auth.json')
+      const p = spawn(process.execPath, [parent, hang, sandboxHome, how], { env: { ...process.env, HOME: realHome }, stdio: 'ignore' })
+      const ended = new Promise((r) => p.once('exit', (code, signal) => r({ code, signal })))
+      t.after(() => p.kill('SIGKILL'))
+      await until(() => existsSync(auth) && readFileSync(auth, 'utf8') === AUTH) // the copy is in place mid-attempt
+      p.kill(how === 'exit' ? 'SIGUSR2' : how)
+      const { code, signal } = await ended
+      assert.deepEqual({ code, signal }, how === 'exit' ? { code: 3, signal: null } : { code: null, signal: how }) // the default action still applies
+      assert.equal(existsSync(auth), false)
+      assert.equal(existsSync(sandboxHome), false)
+    })
+  }
 
   test('a non-localhost or url-less MCP server refuses to start, before pi or the sandbox', () => {
     for (const server of [{ url: 'https://fermi.example.workers.dev/mcp' }, { url: 'http://10.0.0.5/mcp' }, { command: 'npx', args: ['some-mcp'] }]) {

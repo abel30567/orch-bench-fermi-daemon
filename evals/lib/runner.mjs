@@ -1,10 +1,11 @@
 // One scenario attempt: fresh fakes + eval target + fault proxy, enqueue the
 // inbound message through the channel webhook, run one drain through the
 // harness adapter with prompts/drain.md (rendered with the eval overlay), then dump state and grade the trace.
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { removeOnExit } from '../../harness/pi.mjs'
 import { loadPrompt } from '../../lib/prompt.mjs'
 import { evaluate } from './assertions.mjs'
 import { mcpConnect, resultText } from './mcp-client.mjs'
@@ -89,7 +90,8 @@ export async function runAttempt({ scenario, attempt, harness, model, worker, ti
     let sandboxHome
     if (harness.name === 'pi') {
       sandboxHome = mkdtempSync(join(tmpdir(), 'fermi-eval-pi-home-'))
-      closers.push(async () => rmSync(sandboxHome, { recursive: true, force: true }))
+      const removeHome = removeOnExit(sandboxHome) // also on Ctrl-C/SIGTERM, when the closers never run
+      closers.push(async () => removeHome())
     }
     const harnessOpts = {
       model,
