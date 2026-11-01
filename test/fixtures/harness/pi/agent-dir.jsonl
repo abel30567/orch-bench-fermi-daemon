@@ -1,0 +1,4 @@
+{"type":"agent_start"}
+{"$fake":"agent_dir"}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"OK"}],"stopReason":"stop"}}
+{"type":"agent_settled"}
