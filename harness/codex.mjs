@@ -47,6 +47,8 @@
 //   - Error kinds. app-server errors carry codexErrorInfo (mapped by INFO_KIND);
 //     exec's turn.failed carries only a message, so a failure whose text names no
 //     status or known phrase (e.g. "high demand" overload) is unknown_error there.
+//   - Early exit. A codex that exits before reading its stdin (EPIPE on the prompt
+//     write) is reported by its exit code and stderr; stream errors are never thrown.
 //   - Credential isolation: SWAP-GATE BLOCKER. codex reads its credential from
 //     CODEX_HOME/auth.json (a plain file its shell tool can read) or OPENAI_API_KEY
 //     in the environment; there is no fd handoff, so tokenFd is refused and the
@@ -137,6 +139,9 @@ function spawnCodex(args, o) {
   }
   child.on('error', cleanup) // a spawn failure (missing bin, bad cwd)
   child.on('close', cleanup)
+  // codex may exit before reading its stdin: a write then fails with EPIPE. Its exit
+  // code and stderr report it; the stream error is ignored, never thrown.
+  for (const s of [child.stdin, child.stdout, child.stderr]) s.on('error', () => {})
   return child
 }
 

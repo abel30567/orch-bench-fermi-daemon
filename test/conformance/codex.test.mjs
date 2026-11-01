@@ -22,6 +22,7 @@ const script = (name, body) => {
   return p
 }
 const bin = script('codex', `exec "${process.execPath}" "${fake}" "$@"`)
+const BIG = 'x'.repeat(1 << 20) // larger than any pipe buffer: a write to a closed stdin fails
 
 runConformance(() => import('../../harness/codex.mjs'), { name: 'codex', options: { bin } }, {
   expectedFail: {
@@ -121,16 +122,36 @@ describe('codex adapter', () => {
         assert.throws(() => codex.runOnce({ ...o, bin: 'co\0dex', prompt: 'x' }), /null bytes/)
       }))
 
+    // The fakes below exit without reading stdin and the prompt is larger than a pipe buffer,
+    // so the prompt write always fails with EPIPE: the race CI hit is hit on every run.
     test('runOnce: codex crashes (killed by a signal, no output)', () =>
       withTmp(async (o) => {
-        const r = await runOnce({ ...o, bin: script('codex-crash', 'kill -9 $$'), prompt: 'x' }).done
+        const r = await runOnce({ ...o, bin: script('codex-crash', 'kill -9 $$'), prompt: BIG }).done
         assert.equal(r.outcome, null)
       }))
 
     test('runOnce: codex exits non-zero', () =>
       withTmp(async (o) => {
-        const r = await runOnce({ ...o, bin: script('codex-fail', 'exit 3'), prompt: 'x' }).done
+        const r = await runOnce({ ...o, bin: script('codex-fail', 'echo "codex: bad config" >&2; exit 3'), prompt: BIG }).done
         assert.equal(r.code, 3)
+        assert.equal(r.outcome, null)
+        assert.match(r.stderr, /codex: bad config/)
+      }))
+
+    test('startSession: codex exits before reading stdin, the pending send ends its turn', () =>
+      withTmp(async (o) => {
+        const s = startSession({ ...o, bin: script('codex-early', 'echo "codex: early" >&2; exit 3') })
+        const ends = []
+        let stderr = ''
+        s.events.on('event', (ev) => ev.type === 'turn_end' && ends.push(ev))
+        s.events.on('stderr', (d) => (stderr += d))
+        assert.equal(s.send(BIG), true)
+        await new Promise((resolve) => s.events.once('exit', resolve))
+        await new Promise((resolve) => setTimeout(resolve, 50))
+        assert.equal(ends.length, 1)
+        assert.equal(ends[0].ok, false)
+        assert.match(stderr, /codex: early/)
+        assert.equal(s.alive, false)
       }))
 
     test('startSession: missing binary emits exit and refuses sends', () =>
