@@ -17,6 +17,8 @@
 //   'raw'    one raw output line, for logs in the harness's native format
 //   'stderr' a stderr chunk (string)
 //   'exit'   the exit code
+//   'error'  (claude-code runOnce) the child's spawn error, e.g. a missing bin;
+//            unhandled it throws, as the child's own 'error' would
 //
 // Normalized events ({ type, ... }):
 //   init        { harness, version, model, tools[] }

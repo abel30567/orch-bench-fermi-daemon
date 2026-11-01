@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, openSync, closeSync, realpathSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, chmodSync, openSync, closeSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { once } from 'node:events'
@@ -135,7 +135,19 @@ describe('AC2: recorded Claude stream → normalized events (golden)', () => {
   })
 
   test('the warm worker writes the raw log and the normalized log for a drain turn', async () => {
-    const { runs, log } = await runWorker({ result: SUCCESS, durationMs: 1500, env: { FAKE_STREAM: STREAM } })
+    // Stop the worker once both logs are fully written, not after a fixed window (flaky under load).
+    const want = readFileSync(STREAM, 'utf8')
+    const written = ({ home }) => {
+      const dir = join(home, 'fermi-daemon/runs')
+      const read = (f) => (existsSync(join(dir, f)) ? readFileSync(join(dir, f), 'utf8') : '')
+      return until(() => {
+        const raw = readdirSync(dir).filter((f) => /^warm-\d+\.log$/.test(f)).sort()[0]
+        if (!raw || read(raw) !== want) return false
+        const ev = read(raw.replace(/\.log$/, '.events.jsonl'))
+        return ev.endsWith('\n') && ev.trim().split('\n').length >= GOLDEN.length
+      }, 15000).catch(() => {})
+    }
+    const { runs, log } = await runWorker({ result: SUCCESS, durationMs: 0, env: { FAKE_STREAM: STREAM }, act: written })
     const first = Object.keys(runs).filter((f) => /^warm-\d+\.log$/.test(f)).sort()[0]
     assert.ok(first, log)
     assert.equal(runs[first], readFileSync(STREAM, 'utf8'))
