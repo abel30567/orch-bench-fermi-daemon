@@ -1,7 +1,8 @@
 // One scenario attempt: fresh fakes + eval target + fault proxy, enqueue the
 // inbound message through the channel webhook, run one drain through the
 // harness adapter with prompts/drain.md (rendered with the eval overlay), then dump state and grade the trace.
-import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadPrompt } from '../../lib/prompt.mjs'
@@ -90,6 +91,13 @@ export async function runAttempt({ scenario, attempt, harness, model, worker, ti
       mcpConfig: mcpConfigFile,
       allowedTools: ['mcp__fermi__*'],
       env: { ENABLE_CLAUDEAI_MCP_SERVERS: 'false' }, // no claude.ai connectors (the production Fermi) next to the eval server
+    }
+    // pi reads its MCP servers from $HOME/.pi/agent, so it runs in a throwaway HOME
+    // that holds only the eval worker (harness/pi.mjs). A minimal one until DMN-22's sandbox lands.
+    if (harness.name === 'pi') {
+      const home = mkdtempSync(join(tmpdir(), 'fermi-eval-home-'))
+      closers.push(async () => rmSync(home, { recursive: true, force: true }))
+      harnessOpts.sandboxHome = home
     }
     // A `session` scenario runs warm-worker turns in one session with drain.md as the system prompt (session.mjs).
     const run = scenario.session
