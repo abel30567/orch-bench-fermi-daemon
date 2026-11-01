@@ -3,13 +3,17 @@
 // stop that interrupts a turn mid-task, a Teams message (a warm turn, not a queue
 // task), and the session still answering afterwards. A scenario opts in with
 //
-//   "session": [ { "turn": "drain", "interruptAfter": "mac_shell" }, { "turn": "stop" }, { "turn": "keepalive" } ]
+//   "session": [ { "turn": "drain", "interruptAfterClaim": { "ms": 30000 } }, { "turn": "stop" }, { "turn": "keepalive" } ]
 //
-// turn: drain | stop | teams | keepalive (texts below). interruptAfter: call the
-// session's interrupt() as soon as the turn calls that tool, as the control
-// endpoint's POST /abort does. That turn's turn_end is marked `interrupted: true`
+// turn: drain | stop | teams | keepalive (texts below). interruptAfter: "<tool>"
+// calls the session's interrupt() as soon as the turn calls that tool, as the
+// control endpoint's POST /abort does. interruptAfterClaim: { ms? } (or true)
+// interrupts once a task_claim has returned a task, on the turn's next Fermi tool
+// call or `ms` after the claim, whichever comes first, so the stop lands mid-task
+// whatever the model does next. That turn's turn_end is marked `interrupted: true`
 // so the runner does not count it as a harness failure.
 import { EventEmitter } from 'node:events'
+import { isFermiCall } from './assertions.mjs'
 
 // The turn texts warm-worker.mjs sends (test/evals-control.test.mjs keeps them in sync).
 export const TURNS = {
@@ -30,10 +34,24 @@ export const TURNS = {
 
 const died = (detail) => ({ type: 'turn_end', ok: false, kind: 'unknown_error', detail, durationMs: 0, raw: null })
 
-// One turn: send `text`, forward its events, interrupt on `interruptAfter`; resolves with its turn_end.
-function runTurn(session, text, interruptAfter, emit) {
+// Did this task_claim result hand out a task? Content may be the JSON text or a block list.
+const claimedTask = (content) => /\\?"tasks\\?"\s*:\s*\[\s*\{/.test(typeof content === 'string' ? content : JSON.stringify(content ?? ''))
+
+// One turn: send `text`, forward its events, interrupt per `t` (interruptAfter /
+// interruptAfterClaim); resolves with its turn_end.
+function runTurn(session, text, t, emit) {
   return new Promise((resolve) => {
     let interrupted = false
+    let timer = null
+    const claims = new Set() // ids of this turn's task_claim calls
+    let claimed = false
+    const interrupt = () => {
+      if (interrupted) return
+      interrupted = true
+      clearTimeout(timer)
+      session.interrupt()
+    }
+    const afterClaim = t.interruptAfterClaim
     const onEvent = (ev) => {
       if (ev.type === 'turn_end') {
         off()
@@ -42,9 +60,14 @@ function runTurn(session, text, interruptAfter, emit) {
         return resolve(end)
       }
       emit(ev)
-      if (interruptAfter && !interrupted && ev.type === 'tool_call' && ev.name === interruptAfter) {
-        interrupted = true
-        session.interrupt()
+      if (interrupted) return
+      if (t.interruptAfter && ev.type === 'tool_call' && ev.name === t.interruptAfter) return interrupt()
+      if (!afterClaim) return
+      if (ev.type === 'tool_call' && claimed && isFermiCall(ev)) return interrupt()
+      if (ev.type === 'tool_call' && ev.name === 'task_claim') claims.add(ev.id)
+      if (ev.type === 'tool_result' && !claimed && claims.has(ev.id) && ev.ok !== false && claimedTask(ev.content)) {
+        claimed = true
+        if (afterClaim.ms != null) timer = setTimeout(interrupt, afterClaim.ms)
       }
     }
     const onExit = (code) => {
@@ -54,6 +77,7 @@ function runTurn(session, text, interruptAfter, emit) {
       resolve(end)
     }
     const off = () => {
+      clearTimeout(timer)
       session.events.off('event', onEvent)
       session.events.off('exit', onExit)
     }
@@ -85,7 +109,7 @@ export function runSession(harness, opts, { turns, inbound }) {
         emit((outcome = died(`session died before turn ${i + 1} (${t.turn})`)))
         break
       }
-      outcome = await runTurn(session, TURNS[t.turn](inbound), t.interruptAfter, emit)
+      outcome = await runTurn(session, TURNS[t.turn](inbound), t, emit)
     }
     session.close()
     return { code: outcome?.ok ? 0 : 1, outcome, events: all, stderr: '' }

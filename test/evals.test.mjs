@@ -5,7 +5,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ROOT } from './run-worker.mjs'
-import { evaluate, outbound } from '../evals/lib/assertions.mjs'
+import { evaluate, falsePromises, internalToolCalls, outbound } from '../evals/lib/assertions.mjs'
 import { validate } from '../evals/lib/json-schema.mjs'
 import { assertLocalUrls, isLocalUrl } from '../evals/lib/net.mjs'
 import { DRAIN_PROMPT, EVAL_OVERLAY, runAttempt } from '../evals/lib/runner.mjs'
@@ -314,5 +314,56 @@ describe('assertions', () => {
     const f = join(tmp(), 's.json')
     writeFileSync(f, JSON.stringify({ inbound: { channel: 'sl' }, expect: [{ calledd: 'x' }] }))
     assert.throws(() => loadScenario(f), /inbound needs.*bad assertion/)
+  })
+})
+
+describe('grading fidelity (first live baseline triage)', () => {
+  const call = (name, input = {}, rawName = `mcp__fermi__${name}`) => ({ type: 'tool_call', name, rawName, input })
+
+  test('internalToolCalls names the non-Fermi calls; maxToolCalls counts only Fermi calls', () => {
+    const trace = [call('ToolSearch', { query: 'select:mcp__fermi__task_claim' }, 'ToolSearch'), call('task_claim'), call('skill_load', {}, 'mcp__claude_ai_Fermi__skill_load'), call('Bash', {}, 'Bash'), call('channel_send')]
+    assert.deepEqual(internalToolCalls(trace), ['ToolSearch', 'Bash'])
+    const check = (n) => evaluate([{ maxToolCalls: n }], { trace, state: {}, scenario: {} })
+    assert.deepEqual(check(3), [])
+    assert.match(check(2)[0].message, /3 Fermi tool calls > 2/)
+  })
+
+  test('AC1: one internal ToolSearch plus 5 Fermi calls passes maxToolCalls: 5; results.json reports internalToolCalls', () => {
+    const dir = tmp()
+    const script = [{ internal: 'ToolSearch', args: { query: 'select:mcp__fermi__task_claim' } }, ...REPLY()]
+    writeFileSync(join(dir, 'budget.json'), JSON.stringify(scenario({ name: 'budget', expect: [{ maxToolCalls: 5 }], fake: { script } })))
+    writeFileSync(join(dir, 'tight.json'), JSON.stringify(scenario({ name: 'tight', expect: [{ maxToolCalls: 4 }], expectOutcome: 'fail', fake: { script } })))
+    const out = tmp()
+    const r = runCli(['--harness', 'fake', '--scenarios', `${dir}/*.json`, '--out', out])
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    const results = readJson(out, 'results.json')
+    assert.deepEqual(validate(SCHEMA, results), [])
+    const budget = results.find((x) => x.scenario === 'budget')
+    assert.equal(budget.pass, true, JSON.stringify(budget.failed))
+    assert.deepEqual(budget.internalToolCalls, ['ToolSearch'])
+    assert.equal(budget.toolCalls.length, 6)
+    const tight = results.find((x) => x.scenario === 'tight')
+    assert.deepEqual(tight.failed.map((f) => f.message), ['5 Fermi tool calls > 4'])
+  })
+
+  const FP = readJson(ROOT, 'evals/fixtures/false-promises.json')
+  test('AC2: falsePromises finds no claim in the real Opus reply and the no-claim fixtures', () => {
+    for (const t of [FP.opusReply, ...FP.noClaim]) assert.deepEqual(falsePromises(t), [], t)
+  })
+  test('AC2: falsePromises flags every claim fixture, including "Done! I\'ll remind you every Friday"', () => {
+    assert.ok(FP.claim.includes("Done! I'll remind you every Friday."))
+    for (const t of FP.claim) assert.ok(falsePromises(t).length > 0, t)
+  })
+  test('noFalsePromise grades the tool\'s args', () => {
+    const check = (text) => evaluate([{ noFalsePromise: 'channel_send' }], { trace: [call('channel_send', { chat_id: 'D1', text })], state: {}, scenario: {} })
+    assert.deepEqual(check(FP.opusReply), [])
+    assert.match(check("Done! I'll remind you every Friday.")[0].message, /channel_send claims success.*i'll remind you every friday/)
+  })
+
+  test('atMostOnce', () => {
+    const check = (n) => evaluate([{ atMostOnce: 'mac_shell' }], { trace: Array.from({ length: n }, () => call('mac_shell')), state: {}, scenario: {} })
+    assert.deepEqual(check(0), [])
+    assert.deepEqual(check(1), [])
+    assert.match(check(2)[0].message, /mac_shell was called 2 times, expected at most once/)
   })
 })
