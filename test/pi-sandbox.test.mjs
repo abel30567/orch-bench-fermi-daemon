@@ -22,22 +22,20 @@ const until = async (cond, ms = 15000) => {
 const AUTH = '{"anthropic":{"type":"oauth","access":"fake-access-token"}}'
 
 // A fake pi that records what it sees on start (HOME, its agent dir, the
-// mcp.json and auth.json there), then answers each prompt with an empty run.
-const FAKE = `
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { createInterface } from 'node:readline'
-const read = (p) => (existsSync(p) ? readFileSync(p, 'utf8') : null)
-const home = process.env.HOME
-writeFileSync(process.env.PROBE_OUT, JSON.stringify({
-  home, agentDir: process.env.PI_CODING_AGENT_DIR,
-  mcp: read(home + '/.pi/agent/mcp.json'), auth: read(home + '/.pi/agent/auth.json'),
-}))
-const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n')
-createInterface({ input: process.stdin }).on('line', (l) => {
-  const m = JSON.parse(l)
-  if (m.type === 'prompt') { out({ type: 'response', command: 'prompt', success: true }); out({ type: 'agent_settled' }) }
-})
+// mcp.json and auth.json there) next to PROBE_OUT, then answers each prompt with
+// an empty run. Plain sh, no node: a node child per test slows the suite's timing tests.
+const FAKE = `#!/bin/sh
+p="$PROBE_OUT"
+printf %s "$PI_CODING_AGENT_DIR" > "$p.agentDir"
+cp "$HOME/.pi/agent/mcp.json" "$p.mcp" 2>/dev/null
+cp "$HOME/.pi/agent/auth.json" "$p.auth" 2>/dev/null
+printf %s "$HOME" > "$p" # last: the probe is complete
+while IFS= read -r l; do
+  case "$l" in *'"type":"prompt"'*) echo '{"type":"response","command":"prompt","success":true}'; echo '{"type":"agent_settled"}' ;; esac
+done
 `
+const read = (p) => (existsSync(p) ? readFileSync(p, 'utf8') : null)
+const readProbe = (p) => ({ home: read(p), agentDir: read(`${p}.agentDir`), mcp: read(`${p}.mcp`), auth: read(`${p}.auth`) })
 
 let realHome, savedHome, bin
 before(() => {
@@ -50,10 +48,8 @@ before(() => {
   writeFileSync(join(agent, 'auth.json'), AUTH)
   savedHome = process.env.HOME
   process.env.HOME = realHome
-  const d = tmp()
-  writeFileSync(join(d, 'fake.mjs'), FAKE)
-  bin = join(d, 'pi')
-  writeFileSync(bin, `#!/bin/sh\nexec "${process.execPath}" "${join(d, 'fake.mjs')}" "$@"\n`)
+  bin = join(tmp(), 'pi')
+  writeFileSync(bin, FAKE)
   chmodSync(bin, 0o755)
 })
 after(() => {
@@ -69,7 +65,7 @@ describe('pr-60: pi eval mode', () => {
     writeFileSync(mcpFile, JSON.stringify(LOCAL))
     const { outcome } = await runOnce({ bin, prompt: 'x', mcpConfig: mcpFile, sandboxHome, env: { PROBE_OUT: probe, HOME: '/nope', PI_CODING_AGENT_DIR: '/nope' } }).done
     assert.equal(outcome.ok, true)
-    const seen = JSON.parse(readFileSync(probe, 'utf8'))
+    const seen = readProbe(probe)
     assert.equal(seen.home, sandboxHome)
     assert.equal(seen.agentDir, join(sandboxHome, '.pi', 'agent'))
     assert.deepEqual(JSON.parse(seen.mcp), { mcpServers: { fermi: { url: 'http://127.0.0.1:4100/mcp' } } })
@@ -80,7 +76,7 @@ describe('pr-60: pi eval mode', () => {
     const sandboxHome = tmp()
     const probe = join(tmp(), 'probe.json')
     await runOnce({ bin, prompt: 'x', mcpConfig: LOCAL, sandboxHome, env: { PROBE_OUT: probe } }).done
-    assert.equal(JSON.parse(readFileSync(probe, 'utf8')).auth, AUTH)
+    assert.equal(readProbe(probe).auth, AUTH)
     assert.equal(existsSync(join(sandboxHome, '.pi', 'agent', 'auth.json')), false)
     assert.equal(readFileSync(join(realHome, '.pi', 'agent', 'auth.json'), 'utf8'), AUTH) // the real one is untouched
   })
