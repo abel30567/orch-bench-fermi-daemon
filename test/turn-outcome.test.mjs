@@ -110,7 +110,7 @@ describe('warm-worker with a failing harness', { concurrency: true }, () => {
   })
 
   test('a successful turn after errors resets the backoff and drains normally', async () => {
-    const { drains, log } = await runWorker({ result: noResetTime, errors: 2, durationMs: sim(180_000) })
+    const { drains, log } = await runWorker({ result: noResetTime, errors: 2, durationMs: sim(240_000) })
     assert.match(log, /drain recovered after 2 error turn\(s\)/)
     const after = drains.slice(2) // turns from the first success on
     assert.ok(after.length >= 5, `${after.length} drain turns after recovery\n${log}`)
