@@ -129,8 +129,8 @@ describe('codex adapter', () => {
     test('startSession: missing binary emits exit and refuses sends', () =>
       withTmp(async (o) => {
         const s = startSession({ ...o, bin: '/nonexistent/codex' })
-        assert.equal(s.send('turn'), false)
         await new Promise((resolve) => s.events.once('exit', resolve))
+        assert.equal(s.send('turn'), false)
         assert.equal(s.alive, false)
         await new Promise((resolve) => setTimeout(resolve, 50))
       }))

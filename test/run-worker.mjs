@@ -13,6 +13,22 @@ export const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const SCALE = 60
 export const sim = (ms) => Math.round(ms / SCALE)
 
+export const until = async (cond, ms = 5000) => {
+  for (const t0 = Date.now(); !cond(); ) {
+    if (Date.now() - t0 > ms) throw new Error('timed out')
+    await new Promise((r) => setTimeout(r, 20))
+  }
+}
+
+// `act`s for runWorker with durationMs: 0: stop the worker once the fake harness has
+// recorded a spawn, or `n` drain turns. Not a fixed window: startup alone can take
+// over a second under `npm test`'s load. On a timeout the worker stops anyway and
+// the test's own assertions report what happened.
+const turnsLog = (home) => (existsSync(join(home, 'turns.log')) ? readFileSync(join(home, 'turns.log'), 'utf8') : '')
+export const spawned = ({ home }) => until(() => turnsLog(home).includes('"kind":"spawn"'), 15000).catch(() => {})
+export const drained = (n) => ({ home }) =>
+  until(() => turnsLog(home).split('\n').filter((l) => l.includes('"drain":true')).length >= n, 15000).catch(() => {})
+
 // `env` adds/overrides worker env vars; `prompt` is prompts/drain.md, `overlay` (if set) prompts/local.json; `act({ log, home })` runs alongside the
 // worker (log() is its output so far). Returns the fake harness's records and
 // the worker's runs/ files.

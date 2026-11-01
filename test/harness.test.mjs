@@ -1,14 +1,14 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, openSync, closeSync, realpathSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, chmodSync, openSync, closeSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { once } from 'node:events'
 import http from 'node:http'
 import { loadHarness, bareToolName } from '../harness/index.mjs'
 import { normalizeEvent, startSession, runOnce } from '../harness/claude-code.mjs'
-import { ROOT, runWorker, sim } from './run-worker.mjs'
+import { ROOT, runWorker, spawned, until } from './run-worker.mjs'
 
 const FAKE = join(ROOT, 'test/fixtures/fake-claude.mjs')
 const STREAM = join(ROOT, 'test/fixtures/claude-stream.jsonl')
@@ -21,12 +21,6 @@ const script = (path, body) => {
   writeFileSync(path, `#!/bin/bash\n${body}\n`)
   chmodSync(path, 0o755)
   return path
-}
-const until = async (cond, ms = 5000) => {
-  for (const t0 = Date.now(); !cond(); ) {
-    if (Date.now() - t0 > ms) throw new Error('timed out')
-    await new Promise((r) => setTimeout(r, 20))
-  }
 }
 
 // The argv warm-worker.mjs spawned claude with before DMN-3 (origin/main @ 7913c2e).
@@ -43,7 +37,7 @@ const TODAY_WARM_ARGV = [
 
 describe('AC1: HARNESS unset spawns claude with today\'s argv', { concurrency: true }, () => {
   test('default bin (~/.local/bin/claude)', async () => {
-    const { events, log } = await runWorker({ result: SUCCESS, pending: 0, durationMs: 1000 })
+    const { events, log } = await runWorker({ result: SUCCESS, pending: 0, durationMs: 0, act: spawned })
     const spawns = events.filter((e) => e.kind === 'spawn')
     assert.equal(spawns.length, 1, log)
     assert.equal(spawns[0].bin, 'default')
@@ -54,7 +48,7 @@ describe('AC1: HARNESS unset spawns claude with today\'s argv', { concurrency: t
 
   test('CLAUDE_BIN picks the binary, argv unchanged', async () => {
     const alt = script(join(tmp(), 'hbar'), `FAKE_BIN=hbar exec "${process.execPath}" "${FAKE}" "$@"`)
-    const { events, log } = await runWorker({ result: SUCCESS, pending: 0, durationMs: 1000, env: { CLAUDE_BIN: alt } })
+    const { events, log } = await runWorker({ result: SUCCESS, pending: 0, durationMs: 0, env: { CLAUDE_BIN: alt }, act: spawned })
     const spawns = events.filter((e) => e.kind === 'spawn')
     assert.equal(spawns.length, 1, log)
     assert.equal(spawns[0].bin, 'hbar')
@@ -72,8 +66,6 @@ describe('AC1: HARNESS unset spawns claude with today\'s argv', { concurrency: t
 describe('DMN-5: HARNESS=pi spawns pi in RPC mode', () => {
   test('PI_BIN picks the binary; argv is the pi trial\'s', async () => {
     const pi = script(join(tmp(), 'pi'), `FAKE_BIN=pi exec "${process.execPath}" "${FAKE}" "$@"`)
-    // Run until the fake has recorded its spawn (not a fixed window: slow under load).
-    const spawned = ({ home }) => until(() => existsSync(join(home, 'turns.log')) && records(home).some((e) => e.kind === 'spawn'), 15000).catch(() => {})
     const { events, log } = await runWorker({ result: SUCCESS, pending: 0, durationMs: 0, env: { HARNESS: 'pi', PI_BIN: pi }, act: spawned })
     const spawns = events.filter((e) => e.kind === 'spawn')
     assert.equal(spawns.length, 1, log)
@@ -135,10 +127,20 @@ describe('AC2: recorded Claude stream → normalized events (golden)', () => {
   })
 
   test('the warm worker writes the raw log and the normalized log for a drain turn', async () => {
-    const { runs, log } = await runWorker({ result: SUCCESS, durationMs: 1500, env: { FAKE_STREAM: STREAM } })
+    const raw = readFileSync(STREAM, 'utf8')
+    // Run until the first drain turn's two logs are complete (they flush independently).
+    const logged = ({ home }) => {
+      const dir = join(home, 'fermi-daemon/runs')
+      const text = (f) => (existsSync(join(dir, f)) ? readFileSync(join(dir, f), 'utf8') : '')
+      return until(() => {
+        const f = readdirSync(dir).filter((n) => /^warm-\d+\.log$/.test(n)).sort()[0]
+        return f && text(f) === raw && text(f.replace(/\.log$/, '.events.jsonl')).trim().split('\n').length === GOLDEN.length
+      }, 15000).catch(() => {})
+    }
+    const { runs, log } = await runWorker({ result: SUCCESS, durationMs: 0, env: { FAKE_STREAM: STREAM }, act: logged })
     const first = Object.keys(runs).filter((f) => /^warm-\d+\.log$/.test(f)).sort()[0]
     assert.ok(first, log)
-    assert.equal(runs[first], readFileSync(STREAM, 'utf8'))
+    assert.equal(runs[first], raw)
     const normalized = runs[first.replace(/\.log$/, '.events.jsonl')]
     assert.deepEqual(normalized.trim().split('\n').map((l) => JSON.parse(l)), GOLDEN)
   })

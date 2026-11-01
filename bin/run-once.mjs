@@ -11,6 +11,8 @@
 // --session  resume the session id in this file (if any), then store the run's id there
 // --timeout-s watchdog: SIGTERM the harness after S seconds, SIGKILL 2s later (exit 124)
 //
+// A harness that cannot be spawned logs `run-once: spawn error: <message>` (exit 127).
+//
 // Runs in the current directory (poll.sh cds to the daemon home first). The prompt is
 // rendered with the local.json overlay next to it (lib/prompt.mjs).
 
@@ -21,6 +23,7 @@ import { ALLOWED_TOOLS, SETTING_SOURCES } from '../lib/run-policy.mjs'
 import { loadPrompt } from '../lib/prompt.mjs'
 
 const KILL_GRACE_MS = 2000
+const EXIT_SPAWN_FAILED = 127 // the shell's "command not found"
 
 const { values: o } = parseArgs({
   options: {
@@ -55,16 +58,28 @@ const note = (msg) => out.write(`run-once: ${msg}\n`)
 
 const resume = o.session && existsSync(o.session) ? readFileSync(o.session, 'utf8').trim() : ''
 const harness = await loadHarness()
-const run = harness.runOnce({
-  prompt,
-  cwd: process.cwd(),
-  model: o.model,
-  maxTurns: o['max-turns'] != null ? Number(o['max-turns']) : undefined,
-  allowedTools: ALLOWED_TOOLS,
-  settingSources: SETTING_SOURCES,
-  resume: resume || undefined,
+let run
+try {
+  run = harness.runOnce({
+    prompt,
+    cwd: process.cwd(),
+    model: o.model,
+    maxTurns: o['max-turns'] != null ? Number(o['max-turns']) : undefined,
+    allowedTools: ALLOWED_TOOLS,
+    settingSources: SETTING_SOURCES,
+    resume: resume || undefined,
+  })
+} catch (e) {
+  // Some spawn failures (ENOTDIR) throw instead of emitting 'error'.
+  appendFileSync(o.log, `run-once: spawn error: ${e.message}\n`)
+  process.exit(EXIT_SPAWN_FAILED)
+}
+let spawnFailed = false
+run.events.on('spawnError', (e) => {
+  spawnFailed = true
+  note(`spawn error: ${e.message}`)
 })
-note(`harness pid ${run.pid}`)
+if (run.pid) note(`harness pid ${run.pid}`)
 
 let sessionId = null
 run.events.on('raw', (line) => {
@@ -100,5 +115,6 @@ const { code } = await run.done
 clearTimeout(watchdog)
 clearTimeout(killTimer)
 if (o.session && sessionId && !timedOut) writeFileSync(o.session, sessionId + '\n')
-note(`exit ${timedOut ? 'watchdog' : code}`)
-out.end(() => process.exit(timedOut ? 124 : (code ?? 1)))
+const status = spawnFailed ? EXIT_SPAWN_FAILED : code
+note(`exit ${timedOut ? 'watchdog' : status}`)
+out.end(() => process.exit(timedOut ? 124 : (status ?? 1)))
