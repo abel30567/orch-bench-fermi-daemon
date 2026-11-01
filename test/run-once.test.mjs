@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, chmodSync, realpathSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, chmodSync, realpathSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ROOT, runWorker } from './run-worker.mjs'
@@ -158,7 +158,7 @@ describe('AC2: watchdog kill and lane cleanup', () => {
 // Runs poll.sh in a fake $HOME with the warm worker down (fake pgrep) and an
 // unreachable queue (fake curl), so it goes straight to the heartbeat spawn.
 // Fake nodes answer -v with their version and record any other argv.
-function pollSh({ env = {}, pathNode } = {}) {
+function pollSh({ env = {}, pathNode, pending, lanes = {} } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'dmn7-poll-'))
   const daemon = join(home, 'fermi-daemon')
   const bin = join(home, 'bin')
@@ -167,7 +167,14 @@ function pollSh({ env = {}, pathNode } = {}) {
   writeFileSync(join(daemon, '.env'), 'FERMI_URL=http://127.0.0.1:9\nFERMI_BEARER_TOKEN=t\n')
   const fake = (path, body) => (writeFileSync(path, `#!/bin/sh\n${body}\n`), chmodSync(path, 0o755), path)
   fake(join(bin, 'pgrep'), 'exit 1')
-  fake(join(bin, 'curl'), 'exit 7')
+  fake(join(bin, 'curl'), pending === undefined ? 'exit 7' : `echo '{"pending":${pending}}'`)
+  // lanes: { name: pid } or { name: null } for a pid-less lane aged past the 30s orphan window.
+  for (const [name, pid] of Object.entries(lanes)) {
+    const dir = join(daemon, 'lanes', name)
+    mkdirSync(dir, { recursive: true })
+    if (pid !== null) writeFileSync(join(dir, 'pid'), String(pid))
+    else utimesSync(dir, new Date(Date.now() - 120_000), new Date(Date.now() - 120_000))
+  }
   const node = (name, version) =>
     fake(join(home, name), `[ "$1" = -v ] && { echo ${version}; exit 0; }\nprintf '%s\\n' "$@" > "$FAKE_DIR/${name}.argv"\necho "${name} stderr" >&2`)
   const nodes = { old: node('node14', 'v14.15.1'), new: node('node22', 'v22.3.0') }
@@ -217,5 +224,46 @@ describe('poll.sh node resolution for the cold path', () => {
     assert.deepEqual(r.lanes, ['1'])
     const log = argv[argv.indexOf('--log') + 1]
     assert.match(await waitFor(join(r.daemon, log)), /node22 stderr/)
+  })
+})
+
+describe('poll.sh live-lane count', () => {
+  // A pid that is guaranteed dead: a child that has already exited.
+  const deadPid = spawnSync('/usr/bin/true').pid
+  const livePid = process.pid
+  const spawnedDrains = (log) => (log.match(/spawned drain\.md/g) ?? []).length
+
+  test('empty lanes/ counts 0 live lanes: MAX_CONCURRENT=1 spawns a drain lane', () => {
+    const r = pollSh({ pending: 1, env: (n) => ({ NODE_BIN: n.new, MAX_CONCURRENT: '1' }) })
+    assert.equal(r.status, 0, r.stderr)
+    assert.match(r.pollLog, /spawning 1\b/)
+    assert.match(r.pollLog, /spawned drain\.md in lane 1/)
+    assert.deepEqual(r.lanes, ['1'])
+  })
+
+  test('1 live lane: only the remaining free lanes are spawned', () => {
+    const r = pollSh({ pending: 5, lanes: { 1: livePid }, env: (n) => ({ NODE_BIN: n.new, MAX_CONCURRENT: '3' }) })
+    assert.equal(r.status, 0, r.stderr)
+    assert.equal(spawnedDrains(r.pollLog), 2)
+    assert.deepEqual(r.lanes.sort(), ['1', '2', '3'])
+  })
+
+  test('3 live lanes at MAX_CONCURRENT=3: nothing spawns', () => {
+    const r = pollSh({ pending: 5, lanes: { 1: livePid, 2: livePid, 3: livePid }, env: (n) => ({ NODE_BIN: n.new, MAX_CONCURRENT: '3' }) })
+    assert.equal(r.status, 0, r.stderr)
+    assert.equal(spawnedDrains(r.pollLog), 0)
+    assert.doesNotMatch(r.pollLog, /spawning/)
+  })
+
+  test('stale lanes (dead pid, orphaned pid-less) are reaped and not counted', () => {
+    const r = pollSh({
+      pending: 5,
+      lanes: { 1: livePid, 2: deadPid, 3: null },
+      env: (n) => ({ NODE_BIN: n.new, MAX_CONCURRENT: '3' }),
+    })
+    assert.equal(r.status, 0, r.stderr)
+    assert.match(r.pollLog, /spawning 2\b/)
+    assert.equal(spawnedDrains(r.pollLog), 2)
+    assert.deepEqual(r.lanes.sort(), ['1', '2', '3'])
   })
 })
