@@ -17,6 +17,8 @@
 //     unset) and this process's argv to $FAKE_DIR/cred.json, run a shell child
 //     (inheriting the environment) that dumps its environment to
 //     $FAKE_DIR/child-env.json, and stream that commandExecution item.
+// FAKE_EXIT_EARLY=<code>: write a line to stderr and exit with <code> before reading
+// stdin (either mode), so a prompt written to it always fails with EPIPE.
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { readFileSync, writeFileSync } from 'node:fs'
@@ -122,7 +124,10 @@ async function exec() {
   process.exit(failed ? 1 : 0)
 }
 
-if (process.argv[2] === 'app-server') appServer()
+if (process.env.FAKE_EXIT_EARLY) {
+  process.stderr.write(`fake codex: exiting before reading stdin (CODEX_HOME=${process.env.CODEX_HOME ?? ''})\n`)
+  process.exit(Number(process.env.FAKE_EXIT_EARLY))
+} else if (process.argv[2] === 'app-server') appServer()
 else if (process.argv[2] === 'exec') exec()
 else {
   process.stderr.write(`fake codex: unsupported argv ${process.argv.slice(2).join(' ')}\n`)
