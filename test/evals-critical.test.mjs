@@ -153,7 +153,8 @@ describe('DMN-11 runner support', () => {
   })
 
   test('seedFixture places history in the inbound chat', () => {
-    const f = seedFixture({ history: [{ role: 'user', text: 'x' }] }, { channel: 'wa', chat: '15555550100' })
-    assert.deepEqual([f.history[0].channel, f.history[0].chat_id], ['wa', '15555550100'])
+    const f = seedFixture({ history: [{ role: 'user', text: 'x', minutes_ago: 5 }] }, { channel: 'sl', sender: 'U0EVALFRIEND', chat: 'C0EVAL' })
+    assert.deepEqual(f.conversation, { channel: 'sl', chat_id: 'C0EVAL', sender: 'U0EVALFRIEND', history: [{ role: 'user', text: 'x', minutes_ago: 5 }] })
+    assert.equal('history' in f, false)
   })
 })
