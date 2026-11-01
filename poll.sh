@@ -24,7 +24,7 @@ MAX_TURNS="${MAX_TURNS:-50}"
 MODEL="${MODEL:-claude-opus-4-6[1m]}"        # model for daemon claude -p runs (1M-context Opus 4.6)
 # Allowed tools and setting sources match the warm worker (lib/run-policy.mjs).
 LANE_DIR="$DAEMON_HOME/lanes"
-mkdir -p "$LANE_DIR"
+mkdir -p "$LANE_DIR" logs runs
 rm -f "$DAEMON_HOME/run.lock" 2>/dev/null # legacy single-lock cleanup
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >>logs/poll.log }
@@ -83,9 +83,21 @@ acquire_lane() {
 # which runs the harness, enforces the MAX_RUN_SECONDS watchdog and removes the
 # lane on exit. Only heartbeat runs pass --session (resume from and store
 # session.id): concurrent drain runs must not race on it.
+# Cold path is the fallback for a DOWN warm worker, so it must never fail
+# silently: resolve node ($NODE_BIN from .env, else PATH) and refuse to spawn —
+# loudly, in poll.log, with a non-zero exit — if it is missing or older than 22.
 spawn_run() {
 	local prompt_file="$1"
 	shift
+	local node="${NODE_BIN:-$(command -v node)}"
+	local node_version=""
+	[[ -n "$node" && -x "$node" ]] && node_version=$("$node" --version 2>/dev/null)
+	node_version="${node_version#v}"
+	local node_major="${node_version%%.*}"
+	if [[ ! "$node_major" == <-> ]] || (( node_major < 22 )); then
+		log "ERROR: node '${node:-node}' is v${node_version:-unknown}; bin/run-once.mjs needs node >= 22 (set NODE_BIN in .env) — not spawning $prompt_file"
+		exit 1
+	fi
 	local lane
 	lane=$(acquire_lane) || { log "all $MAX_CONCURRENT lanes busy — deferring $prompt_file"; return 1; }
 	local ts
@@ -95,14 +107,14 @@ spawn_run() {
 	if [[ "$prompt_file" == drain.md ]]; then
 		nohup python3 "$DAEMON_HOME/narrator.py" "runs/$ts.log" >/dev/null 2>&1 &
 	fi
-	nohup node "$DAEMON_HOME/bin/run-once.mjs" \
+	nohup "$node" "$DAEMON_HOME/bin/run-once.mjs" \
 		--prompt "prompts/$prompt_file" \
 		--log "runs/$ts.log" \
 		--lane "$lane" \
 		--model "$MODEL" \
 		--max-turns "$MAX_TURNS" \
 		--timeout-s "$MAX_RUN_SECONDS" \
-		"$@" >/dev/null 2>&1 &
+		"$@" >>"runs/$ts.log" 2>&1 &
 	echo $! >"$lane/pid"
 	log "spawned $prompt_file in lane ${lane:t} (pid $(cat "$lane/pid"), log runs/$ts.log)"
 }
