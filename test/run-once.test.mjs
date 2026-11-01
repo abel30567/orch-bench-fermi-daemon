@@ -93,6 +93,18 @@ describe('AC1: cold argv has the warm worker\'s settings surface', () => {
   })
 })
 
+describe('pr-52: a harness that cannot spawn', () => {
+  test('CLAUDE_BIN=/nope: spawn error in the run log, exit 127, lane removed', async () => {
+    const r = await runOnceCli({ env: { CLAUDE_BIN: '/nope' } })
+    assert.equal(r.code, 127, r.log)
+    assert.match(r.log, /^run-once: spawn error: spawn \/nope ENOENT$/m)
+    assert.match(r.log, /^run-once: exit spawn error$/m)
+    assert.doesNotMatch(r.log, /Unhandled 'error' event/)
+    assert.equal(r.spawns.length, 0)
+    assert.ok(r.laneGone)
+  })
+})
+
 describe('session.id handling (heartbeat runs)', () => {
   test('an existing session.id becomes --resume', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'dmn7-s-'))
