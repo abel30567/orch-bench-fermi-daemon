@@ -28,6 +28,9 @@ mkdir -p "$LANE_DIR"
 rm -f "$DAEMON_HOME/run.lock" 2>/dev/null # legacy single-lock cleanup
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >>logs/poll.log }
+# Portable mtime (BSD `stat -f %m` means something else on GNU/Linux).
+zmodload -F zsh/stat b:zstat
+mtime() { zstat +mtime -- "$1" }
 
 now=$(date +%s)
 
@@ -36,14 +39,14 @@ for lane in "$LANE_DIR"/*(N/); do
 	pid=$(cat "$lane/pid" 2>/dev/null)
 	if [[ -z "$pid" ]]; then
 		# lane just claimed but pid not written yet — only reap if clearly orphaned
-		(( now - $(stat -f %m "$lane") > 30 )) && rm -rf "$lane"
+		(( now - $(mtime "$lane") > 30 )) && rm -rf "$lane"
 		continue
 	fi
 	if ! kill -0 "$pid" 2>/dev/null; then
 		rm -rf "$lane"
 		continue
 	fi
-	age=$(( now - $(stat -f %m "$lane/pid") ))
+	age=$(( now - $(mtime "$lane/pid") ))
 	if (( age > MAX_RUN_SECONDS )); then
 		log "watchdog: killing stuck lane ${lane:t} (pid $pid, ${age}s old)"
 		pkill -P "$pid" 2>/dev/null
@@ -54,7 +57,10 @@ for lane in "$LANE_DIR"/*(N/); do
 		rm -rf "$lane"
 	fi
 done
-live=$(ls -d "$LANE_DIR"/*(N/) 2>/dev/null | wc -l | tr -d ' ')
+# Count via a glob array: with no lanes, `ls -d` of an empty glob lists `.`
+# and would count 1 phantom lane.
+lanes=( "$LANE_DIR"/*(N/) )
+live=${#lanes}
 
 # --- 2. Optional run budget guardrail (opt-in via MAX_RUNS_PER_HOUR > 0) -----
 if ((MAX_RUNS_PER_HOUR > 0)); then
@@ -153,7 +159,7 @@ fi
 if ! pgrep -f 'warm-worker\.mjs' >/dev/null 2>&1; then
 	if (( live < MAX_CONCURRENT )); then
 		last_heartbeat=0
-		[[ -f last-heartbeat ]] && last_heartbeat=$(stat -f %m last-heartbeat)
+		[[ -f last-heartbeat ]] && last_heartbeat=$(mtime last-heartbeat)
 		if (( now - last_heartbeat > HEARTBEAT_SECONDS )); then
 			log "heartbeat: spawning check-in (warm worker down — fallback sweep)"
 			spawn_run heartbeat.md --session session.id
