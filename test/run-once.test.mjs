@@ -91,6 +91,13 @@ describe('AC1: cold argv has the warm worker\'s settings surface', () => {
     assert.match(r.log, /boom: harness crashed/)
     assert.ok(r.laneGone)
   })
+
+  test('harness binary cannot be spawned: the spawn error is in the run log, lane removed', async () => {
+    const r = await runOnceCli({ env: { CLAUDE_BIN: '/nope' } })
+    assert.match(r.log, /^run-once: spawn error: spawn \/nope ENOENT$/m)
+    assert.notEqual(r.code, 0)
+    assert.ok(r.laneGone)
+  })
 })
 
 describe('session.id handling (heartbeat runs)', () => {
