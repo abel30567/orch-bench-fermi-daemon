@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, openSync, closeSync, realpathSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, chmodSync, openSync, closeSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { once } from 'node:events'
@@ -29,6 +29,9 @@ const until = async (cond, ms = 5000) => {
   }
 }
 
+// Run until the fake has recorded its spawn (not a fixed window: slow under load).
+const spawned = ({ home }) => until(() => existsSync(join(home, 'turns.log')) && records(home).some((e) => e.kind === 'spawn'), 15000).catch(() => {})
+
 // The argv warm-worker.mjs spawned claude with before DMN-3 (origin/main @ 7913c2e).
 const TODAY_WARM_ARGV = [
   '-p',
@@ -43,7 +46,7 @@ const TODAY_WARM_ARGV = [
 
 describe('AC1: HARNESS unset spawns claude with today\'s argv', { concurrency: true }, () => {
   test('default bin (~/.local/bin/claude)', async () => {
-    const { events, log } = await runWorker({ result: SUCCESS, pending: 0, durationMs: 1000 })
+    const { events, log } = await runWorker({ result: SUCCESS, pending: 0, durationMs: 0, act: spawned })
     const spawns = events.filter((e) => e.kind === 'spawn')
     assert.equal(spawns.length, 1, log)
     assert.equal(spawns[0].bin, 'default')
@@ -54,7 +57,7 @@ describe('AC1: HARNESS unset spawns claude with today\'s argv', { concurrency: t
 
   test('CLAUDE_BIN picks the binary, argv unchanged', async () => {
     const alt = script(join(tmp(), 'hbar'), `FAKE_BIN=hbar exec "${process.execPath}" "${FAKE}" "$@"`)
-    const { events, log } = await runWorker({ result: SUCCESS, pending: 0, durationMs: 1000, env: { CLAUDE_BIN: alt } })
+    const { events, log } = await runWorker({ result: SUCCESS, pending: 0, durationMs: 0, env: { CLAUDE_BIN: alt }, act: spawned })
     const spawns = events.filter((e) => e.kind === 'spawn')
     assert.equal(spawns.length, 1, log)
     assert.equal(spawns[0].bin, 'hbar')
@@ -72,8 +75,6 @@ describe('AC1: HARNESS unset spawns claude with today\'s argv', { concurrency: t
 describe('DMN-5: HARNESS=pi spawns pi in RPC mode', () => {
   test('PI_BIN picks the binary; argv is the pi trial\'s', async () => {
     const pi = script(join(tmp(), 'pi'), `FAKE_BIN=pi exec "${process.execPath}" "${FAKE}" "$@"`)
-    // Run until the fake has recorded its spawn (not a fixed window: slow under load).
-    const spawned = ({ home }) => until(() => existsSync(join(home, 'turns.log')) && records(home).some((e) => e.kind === 'spawn'), 15000).catch(() => {})
     const { events, log } = await runWorker({ result: SUCCESS, pending: 0, durationMs: 0, env: { HARNESS: 'pi', PI_BIN: pi }, act: spawned })
     const spawns = events.filter((e) => e.kind === 'spawn')
     assert.equal(spawns.length, 1, log)
@@ -135,7 +136,19 @@ describe('AC2: recorded Claude stream → normalized events (golden)', () => {
   })
 
   test('the warm worker writes the raw log and the normalized log for a drain turn', async () => {
-    const { runs, log } = await runWorker({ result: SUCCESS, durationMs: 1500, env: { FAKE_STREAM: STREAM } })
+    // Run until the first turn's logs are complete (not a fixed window: slow under load).
+    const raw = readFileSync(STREAM, 'utf8')
+    const written = ({ home }) => {
+      const dir = join(home, 'fermi-daemon/runs')
+      const done = () => {
+        const first = readdirSync(dir).filter((f) => /^warm-\d+\.log$/.test(f)).sort()[0]
+        const events = first && join(dir, first.replace(/\.log$/, '.events.jsonl'))
+        return first && readFileSync(join(dir, first), 'utf8') === raw &&
+          existsSync(events) && readFileSync(events, 'utf8').split('\n').length === GOLDEN.length + 1
+      }
+      return until(done, 15000).catch(() => {})
+    }
+    const { runs, log } = await runWorker({ result: SUCCESS, durationMs: 0, env: { FAKE_STREAM: STREAM }, act: written })
     const first = Object.keys(runs).filter((f) => /^warm-\d+\.log$/.test(f)).sort()[0]
     assert.ok(first, log)
     assert.equal(runs[first], readFileSync(STREAM, 'utf8'))
@@ -193,7 +206,7 @@ describe('AC3: interrupt sends today\'s control_request and the session survives
       JSON.stringify(msg),
     )
 
-  test('adapter session: interrupt ends the turn, the next turn runs on the same process', async () => {
+  test('adapter session: interrupt ends the turn, the next turn runs on the same process', async (t) => {
     const dir = tmp()
     writeFileSync(join(dir, 'result.json'), JSON.stringify(SUCCESS))
     const bin = script(join(dir, 'claude'), `exec "${process.execPath}" "${FAKE}" "$@"`)
@@ -201,14 +214,16 @@ describe('AC3: interrupt sends today\'s control_request and the session survives
       bin, model: 'm', systemPrompt: 'p', cwd: dir,
       env: { FAKE_DIR: dir, FAKE_RESULT: join(dir, 'result.json'), FAKE_DELAY_MS: '1500' },
     })
+    t.after(() => s.close()) // a failed assertion must not leave the fake running (it hangs the test run)
     const ends = []
     s.events.on('event', (e) => e.type === 'turn_end' && ends.push({ t: Date.now(), ...e }))
-    const t0 = Date.now()
     s.send('There are pending tasks in the queue.')
     await until(() => existsSync(join(dir, 'turns.log')) && records(dir).some((r) => r.kind === 'turn'))
     assert.equal(s.interrupt(), true)
     await until(() => ends.length === 1)
-    assert.ok(ends[0].t - t0 < 1500, 'interrupt ended the turn early')
+    // Timed from the fake's turn start, not from spawn (a slow spawn under load is not a late interrupt).
+    const turnStart = records(dir).find((r) => r.kind === 'turn').t
+    assert.ok(ends[0].t - turnStart < 1500, 'interrupt ended the turn early')
     assert.equal(ends[0].ok, false)
     assert.equal(s.alive, true)
     s.send('Keep-alive. Reply with exactly: OK')

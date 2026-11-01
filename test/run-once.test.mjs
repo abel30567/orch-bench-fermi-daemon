@@ -157,6 +157,15 @@ describe('AC2: watchdog kill and lane cleanup', () => {
   })
 })
 
+describe('a harness that cannot be spawned', () => {
+  test('CLAUDE_BIN=/nope: spawn error in the run log, exit 127, lane removed', async () => {
+    const r = await runOnceCli({ env: { CLAUDE_BIN: '/nope' } })
+    assert.equal(r.code, 127, r.log)
+    assert.match(r.log, /^run-once: spawn error: spawn \/nope ENOENT$/m)
+    assert.ok(r.laneGone)
+  })
+})
+
 describe('DMN-23: the prompt is rendered with prompts/local.json', () => {
   const PROMPT = 'Owner is {{OWNER_SENDER}}; finance is {{FINANCE_CHANNEL}}.\n'
 

@@ -9,7 +9,7 @@
 //     A long-lived duplex session: send() starts a turn, interrupt() aborts the
 //     in-flight turn while the session stays alive.
 //   runOnce({ prompt, ...same })
-//     → { events, done: Promise<{ code, outcome, events[], stderr }> }
+//     → { events, done: Promise<{ code, outcome, events[], stderr, error }> }  (error: the spawn failure, if any)
 //     One prompt, one process; `outcome` is the run's turn_end (null if none).
 //
 // `events` is an EventEmitter:
