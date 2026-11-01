@@ -2,7 +2,7 @@ import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ROOT } from './run-worker.mjs'
@@ -136,6 +136,22 @@ describe('session mode (evals/lib/session.mjs)', () => {
     const r = await runAttempt({ scenario, attempt: 1, harness: dying, timeoutMs: 10_000, outDir: tmp() })
     assert.equal(r.pass, false)
     assert.ok(r.failed.some((f) => /session died before turn 2 \(stop\)/.test(f.message)), JSON.stringify(r.failed))
+  })
+
+  test('pi gets a throwaway sandboxHome, removed after the attempt; other harnesses get none', async () => {
+    const seen = {}
+    const spy = (name) => ({
+      name,
+      startSession: (o) => {
+        seen[name] = { sandboxHome: o.sandboxHome, existed: o.sandboxHome != null && existsSync(o.sandboxHome) }
+        return fake.startSession(o)
+      },
+    })
+    const scenario = loadScenario(join(CONTROL, 'emergency-stop-mid-task.json'))
+    for (const name of ['pi', 'claude-code']) await runAttempt({ scenario, attempt: 1, harness: spy(name), timeoutMs: 10_000, outDir: tmp() })
+    assert.equal(seen.pi.existed, true)
+    assert.equal(existsSync(seen.pi.sandboxHome), false)
+    assert.equal(seen['claude-code'].sandboxHome, undefined)
   })
 
   test("the turn texts match warm-worker.mjs's", () => {

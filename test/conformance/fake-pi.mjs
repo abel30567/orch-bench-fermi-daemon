@@ -12,11 +12,15 @@
 //     $FAKE_DIR/cred.json, run a bash-tool child (inheriting the environment, as
 //     pi's bash tool does) that dumps its environment to $FAKE_DIR/child-env.json,
 //     and stream that tool execution.
+//   {"$fake":"agent_dir"}      eval-mode probe: write HOME, PI_CODING_AGENT_DIR, the
+//     agent dir's mcp.json and its auth.json (null if absent) to $FAKE_DIR/agent-dir.json,
+//     resolving the agent dir as pi does (PI_CODING_AGENT_DIR, else ~/.pi/agent).
 // An abort ends the in-flight run the way pi does: an aborted assistant message,
 // then agent_end and agent_settled, then the abort response.
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createInterface } from 'node:readline'
@@ -37,6 +41,7 @@ async function replay(name) {
     else if (d.$fake === 'hang') await new Promise(() => {})
     else if (d.$fake === 'exit') process.exit(d.code)
     else if (d.$fake === 'tool_env') toolEnv()
+    else if (d.$fake === 'agent_dir') agentDir()
   }
   if (run === t) run = null
 }
@@ -50,6 +55,16 @@ function toolEnv() {
   writeFileSync(join(dir, 'child-env.json'), env)
   out({ type: 'tool_execution_start', toolCallId: 'toolu_env', toolName: 'bash', args: { command: 'env' } })
   out({ type: 'tool_execution_end', toolCallId: 'toolu_env', toolName: 'bash', result: { content: [{ type: 'text', text: env }], details: {} }, isError: false })
+}
+
+function agentDir() {
+  const dir = process.env.PI_CODING_AGENT_DIR || join(homedir(), '.pi', 'agent')
+  const mcp = existsSync(join(dir, 'mcp.json')) ? JSON.parse(readFileSync(join(dir, 'mcp.json'), 'utf8')) : null
+  const auth = existsSync(join(dir, 'auth.json')) ? readFileSync(join(dir, 'auth.json'), 'utf8') : null
+  writeFileSync(
+    join(process.env.FAKE_DIR, 'agent-dir.json'),
+    JSON.stringify({ home: process.env.HOME, agentDir: process.env.PI_CODING_AGENT_DIR ?? null, mcp, auth }),
+  )
 }
 
 const aborted = {
