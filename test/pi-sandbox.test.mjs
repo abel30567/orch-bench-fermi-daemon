@@ -106,7 +106,7 @@ describe('pr-60: pi eval mode', () => {
       const d = tmp()
       const sandboxHome = join(d, 'home')
       const hang = join(d, 'hang-pi')
-      writeFileSync(hang, `#!${process.execPath}\nprocess.stdin.resume()\nprocess.stdin.on('end', () => process.exit())\n`) // one process, no sh: the suite has timing tests
+      writeFileSync(hang, '#!/bin/sh\nexec cat >/dev/null\n') // not a second node: the suite has timing tests. cat ends on stdin EOF
       chmodSync(hang, 0o755)
       const parent = join(d, 'parent.mjs')
       writeFileSync(parent, `
