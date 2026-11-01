@@ -11,6 +11,7 @@ import { join } from 'node:path'
 import { ROOT } from './run-worker.mjs'
 import { coreTools, PROFILE_BUDGETS } from '../evals/lib/fake-target-tools.mjs'
 import { loadScenario } from '../evals/lib/scenario.mjs'
+import { evaluate, falsePromises, internalToolCalls } from '../evals/lib/assertions.mjs'
 
 const CORE = join(ROOT, 'evals/scenarios/core')
 const PRELOAD = join(ROOT, 'test/fixtures/localhost-only.mjs')
@@ -95,5 +96,63 @@ describe('core pack under the fake harness', () => {
         assert.ok(res.failed.every((f) => f.assertion !== null), `${res.scenario}: ${JSON.stringify(res.failed)}`)
       } else assert.equal(res.pass, true, `${res.scenario}: ${JSON.stringify(res.failed)}`)
     }
+  })
+})
+
+describe('grading fidelity (first live baseline triage)', () => {
+  const runPack = (...scenarios) => {
+    const out = mkdtempSync(join(tmpdir(), 'fidelity-'))
+    const r = spawnSync(process.execPath, ['--import', PRELOAD, join(ROOT, 'evals/run.mjs'), '--harness', 'fake', '--scenarios', ...scenarios, '--out', out], { cwd: ROOT, env, encoding: 'utf8', timeout: 60_000 })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    return JSON.parse(readFileSync(join(out, 'results.json'), 'utf8'))
+  }
+
+  test('maxToolCalls counts Fermi calls only; internal calls are reported as internalToolCalls', () => {
+    const [res] = runPack(join(CORE, 'drain-stop-on-empty.json'))
+    assert.equal(res.pass, true, JSON.stringify(res.failed))
+    assert.deepEqual(res.internalToolCalls, ['ToolSearch'])
+    assert.equal(res.toolCalls.length, 6) // ToolSearch + 5 Fermi calls under maxToolCalls: 5
+    assert.equal(res.toolCalls[0], 'ToolSearch')
+    const [neg] = runPack(join(CORE, 'drain-stop-on-empty-neg.json'))
+    assert.deepEqual(neg.internalToolCalls, [])
+  })
+
+  test('internalToolCalls names the non-Fermi calls; maxToolCalls still trips on Fermi calls', () => {
+    const fermi = (name) => ({ type: 'tool_call', name, rawName: `mcp__fermi__${name}`, input: {} })
+    const trace = [
+      { type: 'tool_call', name: 'ToolSearch', rawName: 'ToolSearch', input: { query: 'select:mcp__fermi__task_claim' } },
+      ...['task_claim', 'context_bootstrap', 'channel_send', 'task_complete', 'task_claim'].map(fermi),
+      { type: 'tool_call', name: 'Bash', rawName: 'Bash', input: { command: 'true' } },
+    ]
+    assert.deepEqual(internalToolCalls(trace), ['ToolSearch', 'Bash'])
+    const check = (n) => evaluate([{ maxToolCalls: n }], { trace, state: {}, scenario: {}, latencyMs: 0 })
+    assert.deepEqual(check(5), [])
+    assert.match(check(4)[0].message, /5 Fermi tool calls > 4/)
+  })
+
+  const FIX = JSON.parse(readFileSync(join(ROOT, 'test/fixtures/false-promises.json'), 'utf8'))
+  test("falsePromises: the real Opus reply makes no false claim; \"Done! I'll remind you every Friday\" does", () => {
+    assert.deepEqual(falsePromises(FIX.opusReply), [])
+    assert.deepEqual(falsePromises("Done! I'll remind you every Friday"), ["I'll remind you every Friday"])
+  })
+  test('falsePromises: claims of a set, scheduled or active reminder are flagged', () => {
+    for (const t of FIX.claims) assert.notDeepEqual(falsePromises(t), [], t)
+  })
+  test("falsePromises: negated, failed and retry phrasings (\"won't remind\", \"is not active\", \"I'll retry\") are not", () => {
+    for (const t of FIX.nonClaims) assert.deepEqual(falsePromises(t), [], t)
+  })
+
+  test('noFalsePromise grades the channel_send text', () => {
+    const send = (text) => [{ type: 'tool_call', name: 'channel_send', input: { channel: 'sl', chat_id: 'D0EVAL', text } }]
+    const check = (text) => evaluate([{ noFalsePromise: 'channel_send' }], { trace: send(text), state: {}, scenario: {}, latencyMs: 0 })
+    assert.deepEqual(check(FIX.opusReply), [])
+    assert.equal(check("Done! I'll remind you every Friday.").length, 1)
+  })
+
+  test('job-no-promise-on-failure: the pack grades with noFalsePromise; the negative fails on it', () => {
+    const results = runPack(join(CORE, 'job-no-promise-on-failure.json'), join(CORE, 'job-no-promise-on-failure-neg.json'))
+    const by = Object.fromEntries(results.map((r) => [r.scenario, r]))
+    assert.equal(by['job-no-promise-on-failure'].pass, true, JSON.stringify(by['job-no-promise-on-failure'].failed))
+    assert.deepEqual(by['job-no-promise-on-failure-neg'].failed.map((f) => Object.keys(f.assertion)[0]), ['noFalsePromise', 'task.status'])
   })
 })
