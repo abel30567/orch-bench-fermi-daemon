@@ -40,6 +40,9 @@ error or a non-localhost URL. `--out` defaults to `runs/evals-<timestamp>`.
 3. Starts a fault-injecting MCP proxy in front of the target's `/mcp`. The
    harness gets an MCP config with that proxy as the only server, `fermi`, so
    its tools are `mcp__fermi__*`, plus `ENABLE_CLAUDEAI_MCP_SERVERS=false`.
+   A proxied stream cut from either side (e.g. the harness's SSE `GET /mcp`
+   when the worker shuts down) never crashes the run: it is recorded as one
+   non-fatal trace note `{ type: 'note', source: 'mcp-proxy', detail }`.
    It also gets `sandboxHome`, a temp HOME removed after the attempt. pi reads
    its MCP servers from `~/.pi/agent/mcp.json`, so the pi adapter runs with that
    HOME, writes the MCP config there (refusing any non-localhost URL) and copies
