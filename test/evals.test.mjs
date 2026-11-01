@@ -5,7 +5,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ROOT } from './run-worker.mjs'
-import { evaluate, outbound } from '../evals/lib/assertions.mjs'
+import { evaluate, falsePromises, internalToolCalls, outbound } from '../evals/lib/assertions.mjs'
 import { validate } from '../evals/lib/json-schema.mjs'
 import { assertLocalUrls, isLocalUrl } from '../evals/lib/net.mjs'
 import { DRAIN_PROMPT, EVAL_OVERLAY, runAttempt } from '../evals/lib/runner.mjs'
@@ -314,5 +314,54 @@ describe('assertions', () => {
     const f = join(tmp(), 's.json')
     writeFileSync(f, JSON.stringify({ inbound: { channel: 'sl' }, expect: [{ calledd: 'x' }] }))
     assert.throws(() => loadScenario(f), /inbound needs.*bad assertion/)
+  })
+})
+
+describe('maxToolCalls counts Fermi MCP calls only; internal calls are reported separately', () => {
+  const call = (name, rawName) => ({ type: 'tool_call', name, rawName, input: {} })
+  const trace = [
+    call('ToolSearch', 'ToolSearch'),
+    call('task_claim', 'mcp__fermi__task_claim'),
+    call('Bash', 'Bash'),
+    call('skill_load', 'mcp__claude_ai_Fermi__skill_load'),
+  ]
+  test('internalToolCalls names the non-Fermi calls in order', () => assert.deepEqual(internalToolCalls(trace), ['ToolSearch', 'Bash']))
+  test('maxToolCalls ignores them', () => {
+    assert.deepEqual(evaluate([{ maxToolCalls: 2 }], { trace, state: {}, scenario: {}, latencyMs: 0 }), [])
+    assert.match(evaluate([{ maxToolCalls: 1 }], { trace, state: {}, scenario: {}, latencyMs: 0 })[0].message, /2 Fermi tool calls > 1/)
+  })
+
+  test('a fake run with one ToolSearch and 5 Fermi calls passes maxToolCalls: 5; results.json reports internalToolCalls', () => {
+    const dir = tmp()
+    const s = scenario({ expect: [{ maxToolCalls: 5 }], fake: { script: [{ internal: 'ToolSearch', args: { query: 'select:mcp__fermi__task_claim' } }, ...REPLY()] } })
+    writeFileSync(join(dir, 'unit.json'), JSON.stringify(s))
+    const out = tmp()
+    const r = runCli(['--harness', 'fake', '--scenarios', join(dir, 'unit.json'), '--out', out])
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    const [res] = readJson(out, 'results.json')
+    assert.equal(res.pass, true, JSON.stringify(res.failed))
+    assert.equal(res.toolCalls.length, 6)
+    assert.deepEqual(res.internalToolCalls, ['ToolSearch'])
+    assert.deepEqual(validate(SCHEMA, [res]), [])
+  })
+
+  test('a runner error still reports internalToolCalls (empty)', () => {
+    const out = tmp()
+    runCli(['--harness', 'fake', '--worker', tmp(), '--scenarios', join(EXAMPLES, 'reply-contract.json'), '--out', out])
+    assert.deepEqual(readJson(out, 'results.json')[0].internalToolCalls, [])
+  })
+})
+
+describe('falsePromises / noFalsePromise', () => {
+  const FIX = readJson(ROOT, 'evals/fixtures/false-promises.json')
+  test('the real Opus refusal makes no false claim', () => assert.deepEqual(falsePromises(FIX.opusReply), []))
+  for (const t of FIX.noClaim) test(`no claim: ${t}`, () => assert.deepEqual(falsePromises(t), []))
+  for (const t of FIX.claim) test(`claim: ${t}`, () => assert.ok(falsePromises(t).length, t))
+  test('the assertion checks every call of the tool', () => {
+    const send = (text) => ({ type: 'tool_call', name: 'channel_send', input: { chat_id: 'D1', text } })
+    const run = (...texts) => evaluate([{ noFalsePromise: 'channel_send' }], { trace: texts.map(send), state: {}, scenario: {}, latencyMs: 0 })
+    assert.deepEqual(run(FIX.opusReply), [])
+    const [f] = run(FIX.opusReply, "Done! I'll remind you every Friday")
+    assert.match(f.message, /channel_send falsely claims success: "I'll remind you every Friday"/)
   })
 })
