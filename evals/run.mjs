@@ -8,9 +8,10 @@
 // Scenarios with `"schedule": "weekly"` (the soak) are skipped unless --weekly is given.
 // Exit 0 when every attempt's outcome is the expected one, 1 otherwise, 2 on a
 // usage error or a non-localhost URL.
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { loadHarness } from '../harness/index.mjs'
+import { internalToolCalls } from './lib/assertions.mjs'
 import { assertLocalUrls } from './lib/net.mjs'
 import { runAttempt, summarize } from './lib/runner.mjs'
 import { expandScenarios, expandVariants, loadScenario } from './lib/scenario.mjs'
@@ -54,6 +55,14 @@ function parseArgs(argv) {
 function withFakeScript(s, key) {
   if (!Array.isArray(s.fake?.[key])) throw new Error(`${s.name}: no fake.${key} script`)
   return { ...s, fake: { ...s.fake, script: s.fake[key] }, expectOutcome: 'fail' }
+}
+
+// The harness's own tool calls (ToolSearch, Bash, …) in an attempt's trace: not
+// budgeted by maxToolCalls, reported so the comparison still shows their cost.
+function attemptInternalCalls(file) {
+  if (!existsSync(file)) return []
+  const trace = readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+  return internalToolCalls(trace)
 }
 
 async function main() {
@@ -102,6 +111,7 @@ async function main() {
   for (const scenario of scenarios)
     for (let attempt = 1; attempt <= opts.k; attempt++) {
       const r = await runAttempt({ scenario, attempt, harness, model: opts.model, worker: opts.worker, timeoutMs: opts.timeoutMs, outDir: out })
+      r.internalToolCalls = attemptInternalCalls(join(out, scenario.name, String(attempt), 'trace.jsonl'))
       results.push(r)
       const tag = r.pass ? 'PASS' : r.expectedOutcome === 'fail' ? 'FAIL (expected)' : 'FAIL'
       console.log(`${tag} ${r.scenario} #${attempt} ${r.latencyMs}ms ${r.failed.map((f) => f.message).join(' | ')}`.trimEnd())
