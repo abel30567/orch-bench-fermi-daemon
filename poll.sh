@@ -13,6 +13,11 @@ cd "$DAEMON_HOME" || exit 1
 # Max login and it disables claude.ai connectors (Fermi tools) entirely.
 source ./.env # FERMI_URL, FERMI_BEARER_TOKEN (+ optional overrides below)
 
+# Node for the cold path: NODE_BIN from .env, else whatever is on PATH (launchd's
+# PATH is minimal, so NODE_BIN is the reliable way). Checked in spawn_run.
+NODE="${NODE_BIN:-$(command -v node)}"
+NODE_MIN_MAJOR=22
+
 MAX_CONCURRENT="${MAX_CONCURRENT:-5}"        # parallel drain lanes
 MAX_RUN_SECONDS="${MAX_RUN_SECONDS:-1200}"   # per-lane watchdog (20min). Long enough for real
                                              # work (repo edits, multi-step jobs); safe because the
@@ -86,6 +91,20 @@ acquire_lane() {
 spawn_run() {
 	local prompt_file="$1"
 	shift
+	# The cold path is the fallback for a dead warm worker: never fail silently.
+	# A missing or too-old node gets one clear poll.log line and a non-zero exit.
+	local need="bin/run-once.mjs needs node >= $NODE_MIN_MAJOR (set NODE_BIN in .env) — not spawning $prompt_file"
+	if [[ -z "$NODE" || ! -x "$NODE" ]]; then
+		log "ERROR: node '${NODE:-node}' not found; $need"
+		exit 1
+	fi
+	local node_version
+	node_version=$("$NODE" -v 2>/dev/null)
+	node_version="${node_version#v}"
+	if [[ "${node_version%%.*}" != <-> ]] || (( ${node_version%%.*} < NODE_MIN_MAJOR )); then
+		log "ERROR: node '$NODE' is v${node_version:-?}; $need"
+		exit 1
+	fi
 	local lane
 	lane=$(acquire_lane) || { log "all $MAX_CONCURRENT lanes busy — deferring $prompt_file"; return 1; }
 	local ts
@@ -95,14 +114,14 @@ spawn_run() {
 	if [[ "$prompt_file" == drain.md ]]; then
 		nohup python3 "$DAEMON_HOME/narrator.py" "runs/$ts.log" >/dev/null 2>&1 &
 	fi
-	nohup node "$DAEMON_HOME/bin/run-once.mjs" \
+	nohup "$NODE" "$DAEMON_HOME/bin/run-once.mjs" \
 		--prompt "prompts/$prompt_file" \
 		--log "runs/$ts.log" \
 		--lane "$lane" \
 		--model "$MODEL" \
 		--max-turns "$MAX_TURNS" \
 		--timeout-s "$MAX_RUN_SECONDS" \
-		"$@" >/dev/null 2>&1 &
+		"$@" >>"runs/$ts.log" 2>&1 &
 	echo $! >"$lane/pid"
 	log "spawned $prompt_file in lane ${lane:t} (pid $(cat "$lane/pid"), log runs/$ts.log)"
 }
