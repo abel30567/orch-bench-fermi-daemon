@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { ROOT } from './run-worker.mjs'
 import { runAttempt } from '../evals/lib/runner.mjs'
 import { expandVariants, loadScenario, seedFixture } from '../evals/lib/scenario.mjs'
+import { seedFixture as wranglerSeedFixture } from '../evals/lib/wrangler-target.mjs'
 import * as fake from '../evals/harness/fake.mjs'
 import { cardNumbers } from '../evals/lib/assertions.mjs'
 
@@ -155,5 +156,19 @@ describe('DMN-11 runner support', () => {
   test('seedFixture places history in the inbound chat', () => {
     const f = seedFixture({ history: [{ role: 'user', text: 'x' }] }, { channel: 'wa', chat: '15555550100' })
     assert.deepEqual([f.history[0].channel, f.history[0].chat_id], ['wa', '15555550100'])
+  })
+
+  test('wrangler seedFixture passes history as the eval-seed conversation of the inbound chat', () => {
+    const inbound = { channel: 'wa', sender: '15555550112', chat: '120363000000000001@g.us', text: 'x' }
+    const f = wranglerSeedFixture({ profile: { user: 'u' }, history: [{ role: 'user', text: 'a', minutes_ago: 5 }, { role: 'assistant', text: 'b' }] }, inbound)
+    assert.equal('history' in f, false)
+    assert.deepEqual(f.profile, { user: 'u' })
+    assert.deepEqual(f.conversation, {
+      channel: 'wa',
+      chat_id: '120363000000000001@g.us',
+      sender: '15555550112',
+      history: [{ role: 'user', text: 'a', minutes_ago: 5 }, { role: 'assistant', text: 'b' }],
+    })
+    assert.equal('conversation' in wranglerSeedFixture({}, inbound), false)
   })
 })
