@@ -8,9 +8,10 @@
 // Scenarios with `"schedule": "weekly"` (the soak) are skipped unless --weekly is given.
 // Exit 0 when every attempt's outcome is the expected one, 1 otherwise, 2 on a
 // usage error or a non-localhost URL.
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { loadHarness } from '../harness/index.mjs'
+import { internalToolCalls } from './lib/assertions.mjs'
 import { assertLocalUrls } from './lib/net.mjs'
 import { runAttempt, summarize } from './lib/runner.mjs'
 import { expandScenarios, expandVariants, loadScenario } from './lib/scenario.mjs'
@@ -47,6 +48,14 @@ function parseArgs(argv) {
   if (o.harness !== 'fake' && !o.worker) throw new Error(`--harness ${o.harness} needs --worker <fermi-mcp checkout>`)
   if (o.fakeScript && o.harness !== 'fake') throw new Error('--fake-script needs --harness fake')
   return o
+}
+
+// The attempt's harness-internal calls (e.g. ToolSearch), from the trace the runner wrote.
+function internalCallsOf(out, r) {
+  const file = join(out, r.scenario, String(r.attempt), 'trace.jsonl')
+  if (!existsSync(file)) return []
+  const lines = readFileSync(file, 'utf8').split('\n').filter(Boolean)
+  return internalToolCalls(lines.map((l) => JSON.parse(l)))
 }
 
 // --fake-script <key>: play `fake.<key>` (a scripted misbehaviour, e.g. "negative")
@@ -102,6 +111,7 @@ async function main() {
   for (const scenario of scenarios)
     for (let attempt = 1; attempt <= opts.k; attempt++) {
       const r = await runAttempt({ scenario, attempt, harness, model: opts.model, worker: opts.worker, timeoutMs: opts.timeoutMs, outDir: out })
+      r.internalToolCalls = internalCallsOf(out, r)
       results.push(r)
       const tag = r.pass ? 'PASS' : r.expectedOutcome === 'fail' ? 'FAIL (expected)' : 'FAIL'
       console.log(`${tag} ${r.scenario} #${attempt} ${r.latencyMs}ms ${r.failed.map((f) => f.message).join(' | ')}`.trimEnd())
