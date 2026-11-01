@@ -30,7 +30,7 @@ const runCli = (args) => {
 const NEGATIVES = {
   'cancelled-by-user-negative': ['task.status', 'argsMatch', 'outbox.count', 'argsMatch'],
   'model-switch-ordering-negative': ['order'],
-  'emergency-stop-mid-task-negative': ['task.status', 'argsMatch', 'argsMatch', 'exactlyOnce'],
+  'emergency-stop-mid-task-negative': ['task.status', 'argsMatch', 'argsMatch', 'notCalled'],
   'teams-reply-shell-negative': ['exactlyOnce', 'argsMatch', 'notCalled', 'notCalled'],
   'audio-transcribe-negative': ['argsMatch', 'order'],
   'deferred-schedule-list-negative': ['order'],
@@ -74,7 +74,7 @@ describe('DMN-13 AC1: the control pack passes against the fake harness, every sc
 })
 
 describe('session mode (evals/lib/session.mjs)', () => {
-  test('emergency stop: the turn is interrupted after the in-flight tool, cleanup and a later turn run in the same session', async () => {
+  test('emergency stop: the turn is interrupted on the first Fermi call after the claim, cleanup and a later turn run in the same session', async () => {
     const out = tmp()
     const scenario = loadScenario(join(CONTROL, 'emergency-stop-mid-task.json'))
     const r = await runAttempt({ scenario, attempt: 1, harness: fake, timeoutMs: 10_000, outDir: out })
@@ -83,10 +83,11 @@ describe('session mode (evals/lib/session.mjs)', () => {
     const ends = trace.filter((e) => e.type === 'turn_end')
     assert.deepEqual(ends.map((e) => [e.ok, e.interrupted ?? false]), [[false, true], [true, false], [true, false]])
     assert.equal(trace.filter((e) => e.type === 'init').length, 1) // one session, not three
-    // The steps scripted after the interrupted mac_shell never ran.
+    // The stop fired on context_bootstrap, the first call after task_claim; mac_shell never ran.
     const first = trace.slice(0, trace.indexOf(ends[0]))
     assert.equal(first.at(-1).type, 'tool_result')
-    assert.ok(!first.some((e) => e.type === 'tool_call' && e.name === 'task_complete'))
+    assert.deepEqual(first.filter((e) => e.type === 'tool_call').map((e) => e.name), ['task_claim', 'context_bootstrap'])
+    assert.ok(!trace.some((e) => e.type === 'tool_call' && e.name === 'mac_shell'))
     assert.deepEqual(trace.filter((e) => e.type === 'text').map((e) => e.text), ['OK'])
   })
 
