@@ -12,11 +12,15 @@
 //     $FAKE_DIR/cred.json, run a bash-tool child (inheriting the environment, as
 //     pi's bash tool does) that dumps its environment to $FAKE_DIR/child-env.json,
 //     and stream that tool execution.
+//   {"$fake":"pi_env"}         eval-mode probe: write HOME, PI_CODING_AGENT_DIR,
+//     the agent dir pi would use (PI_CODING_AGENT_DIR, else ~/.pi/agent), the
+//     mcp.json read from it and its auth.json to $FAKE_DIR/pi-env.json.
 // An abort ends the in-flight run the way pi does: an aborted assistant message,
 // then agent_end and agent_settled, then the abort response.
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createInterface } from 'node:readline'
@@ -37,6 +41,7 @@ async function replay(name) {
     else if (d.$fake === 'hang') await new Promise(() => {})
     else if (d.$fake === 'exit') process.exit(d.code)
     else if (d.$fake === 'tool_env') toolEnv()
+    else if (d.$fake === 'pi_env') piEnv()
   }
   if (run === t) run = null
 }
@@ -50,6 +55,15 @@ function toolEnv() {
   writeFileSync(join(dir, 'child-env.json'), env)
   out({ type: 'tool_execution_start', toolCallId: 'toolu_env', toolName: 'bash', args: { command: 'env' } })
   out({ type: 'tool_execution_end', toolCallId: 'toolu_env', toolName: 'bash', result: { content: [{ type: 'text', text: env }], details: {} }, isError: false })
+}
+
+function piEnv() {
+  const agentDir = process.env.PI_CODING_AGENT_DIR || join(homedir(), '.pi/agent')
+  const read = (f) => (existsSync(join(agentDir, f)) ? readFileSync(join(agentDir, f), 'utf8') : null)
+  writeFileSync(
+    join(process.env.FAKE_DIR, 'pi-env.json'),
+    JSON.stringify({ HOME: process.env.HOME, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR ?? null, agentDir, mcp: read('mcp.json'), auth: read('auth.json') }),
+  )
 }
 
 const aborted = {
