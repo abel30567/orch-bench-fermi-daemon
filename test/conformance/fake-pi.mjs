@@ -12,11 +12,14 @@
 //     $FAKE_DIR/cred.json, run a bash-tool child (inheriting the environment, as
 //     pi's bash tool does) that dumps its environment to $FAKE_DIR/child-env.json,
 //     and stream that tool execution.
+//   {"$fake":"home"}           eval-mode probe: record HOME, PI_CODING_AGENT_DIR,
+//     the mcp.json pi would load (<agent-dir>, default $HOME/.pi/agent) and
+//     its auth.json (null if absent) to $FAKE_DIR/home.json.
 // An abort ends the in-flight run the way pi does: an aborted assistant message,
 // then agent_end and agent_settled, then the abort response.
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createInterface } from 'node:readline'
@@ -37,6 +40,7 @@ async function replay(name) {
     else if (d.$fake === 'hang') await new Promise(() => {})
     else if (d.$fake === 'exit') process.exit(d.code)
     else if (d.$fake === 'tool_env') toolEnv()
+    else if (d.$fake === 'home') home()
   }
   if (run === t) run = null
 }
@@ -50,6 +54,19 @@ function toolEnv() {
   writeFileSync(join(dir, 'child-env.json'), env)
   out({ type: 'tool_execution_start', toolCallId: 'toolu_env', toolName: 'bash', args: { command: 'env' } })
   out({ type: 'tool_execution_end', toolCallId: 'toolu_env', toolName: 'bash', result: { content: [{ type: 'text', text: env }], details: {} }, isError: false })
+}
+
+function home() {
+  const agentDir = process.env.PI_CODING_AGENT_DIR || join(process.env.HOME, '.pi', 'agent')
+  writeFileSync(
+    join(process.env.FAKE_DIR, 'home.json'),
+    JSON.stringify({
+      HOME: process.env.HOME,
+      PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR ?? null,
+      mcp: JSON.parse(readFileSync(join(agentDir, 'mcp.json'), 'utf8')),
+      auth: existsSync(join(agentDir, 'auth.json')) ? readFileSync(join(agentDir, 'auth.json'), 'utf8') : null,
+    }),
+  )
 }
 
 const aborted = {
