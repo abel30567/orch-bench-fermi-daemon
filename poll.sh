@@ -23,8 +23,12 @@ HEARTBEAT_SECONDS="${HEARTBEAT_SECONDS:-1800}"
 MAX_TURNS="${MAX_TURNS:-50}"
 MODEL="${MODEL:-claude-opus-4-6[1m]}"        # model for daemon claude -p runs (1M-context Opus 4.6)
 # Allowed tools and setting sources match the warm worker (lib/run-policy.mjs).
+# Cold-path node: $NODE_BIN (from .env) if set, else the first node on PATH.
+# bin/run-once.mjs needs node >= NODE_MIN_MAJOR; spawn_run checks before spawning.
+NODE="${NODE_BIN:-$(command -v node)}"
+NODE_MIN_MAJOR=22
 LANE_DIR="$DAEMON_HOME/lanes"
-mkdir -p "$LANE_DIR"
+mkdir -p "$LANE_DIR" logs runs
 rm -f "$DAEMON_HOME/run.lock" 2>/dev/null # legacy single-lock cleanup
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >>logs/poll.log }
@@ -86,6 +90,13 @@ acquire_lane() {
 spawn_run() {
 	local prompt_file="$1"
 	shift
+	# The cold path is the fallback for a down warm worker: never fail silently.
+	local node_version
+	node_version=$("${NODE:-node}" --version 2>/dev/null)
+	if [[ ! "$node_version" =~ '^v([0-9]+)\.' ]] || (( match[1] < NODE_MIN_MAJOR )); then
+		log "ERROR: node '${NODE:-node}' is v${${node_version#v}:-unknown}; bin/run-once.mjs needs node >= $NODE_MIN_MAJOR (set NODE_BIN in .env) — not spawning $prompt_file"
+		exit 1
+	fi
 	local lane
 	lane=$(acquire_lane) || { log "all $MAX_CONCURRENT lanes busy — deferring $prompt_file"; return 1; }
 	local ts
@@ -95,14 +106,14 @@ spawn_run() {
 	if [[ "$prompt_file" == drain.md ]]; then
 		nohup python3 "$DAEMON_HOME/narrator.py" "runs/$ts.log" >/dev/null 2>&1 &
 	fi
-	nohup node "$DAEMON_HOME/bin/run-once.mjs" \
+	nohup "$NODE" "$DAEMON_HOME/bin/run-once.mjs" \
 		--prompt "prompts/$prompt_file" \
 		--log "runs/$ts.log" \
 		--lane "$lane" \
 		--model "$MODEL" \
 		--max-turns "$MAX_TURNS" \
 		--timeout-s "$MAX_RUN_SECONDS" \
-		"$@" >/dev/null 2>&1 &
+		"$@" >>"runs/$ts.log" 2>&1 &
 	echo $! >"$lane/pid"
 	log "spawned $prompt_file in lane ${lane:t} (pid $(cat "$lane/pid"), log runs/$ts.log)"
 }
