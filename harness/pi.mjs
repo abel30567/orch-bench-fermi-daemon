@@ -7,10 +7,17 @@
 // orderly shutdown), so the prompt never reaches argv.
 //
 // Options beyond the contract:
-//   bin   default env PI_BIN, else `pi` on PATH
+//   bin          default env PI_BIN, else `pi` on PATH
+//   sandboxHome  eval mode (with mcpConfig): pi runs with HOME=<sandboxHome> and
+//                PI_CODING_AGENT_DIR=<sandboxHome>/.pi/agent, whose mcp.json is
+//                written from mcpConfig (piMcpConfig; localhost URLs only), so the
+//                owner's real ~/.pi/agent/mcp.json (production Fermi) is never
+//                read. auth.json is copied in from the real $HOME for the login
+//                (see the credential-isolation blocker below) and deleted when
+//                the process exits.
 // allowedTools is ignored and runOnce's skipPermissions/maxTurns have no pi
-// equivalent. tokenFd, configDir, mcpConfig and scrubSubprocessEnv are refused
-// (they promise an isolation pi cannot give; see below).
+// equivalent. tokenFd, configDir and scrubSubprocessEnv are refused (they promise
+// an isolation pi cannot give; see below), as is mcpConfig without sandboxHome.
 //
 // Known gaps vs the Claude Code adapter:
 //   - No per-turn cost or session id. pi has no turn-level result record (Claude's
@@ -32,15 +39,60 @@
 //     CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR, so tokenFd is refused and the
 //     conformance credential-isolation case is expectedFail. Do not swap pi into
 //     the live worker until the credential is out of reach of its tools.
+//     Eval mode inherits this: the sandbox gets a copy of the real auth.json
+//     (pi's only login channel without an env token), readable by pi's tools for
+//     the length of the attempt.
 
 import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { classifyResult } from '../lib/turn-outcome.mjs'
 import { bareToolName } from './index.mjs'
 
 export const name = 'pi'
 
-const UNSUPPORTED = ['tokenFd', 'configDir', 'mcpConfig', 'scrubSubprocessEnv']
+const UNSUPPORTED = ['tokenFd', 'configDir', 'scrubSubprocessEnv']
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1'])
+
+function isLocalUrl(url) {
+  try {
+    const u = new URL(url)
+    return (u.protocol === 'http:' || u.protocol === 'https:') && LOCAL_HOSTS.has(u.hostname)
+  } catch {
+    return false
+  }
+}
+
+// The runner's MCP config (Claude's --mcp-config shape: an object, a JSON string
+// or a file path) → pi's <agent-dir>/mcp.json. Only url (and headers) carry over,
+// and every server must be a localhost URL: eval mode must never reach production.
+export function piMcpConfig(config) {
+  const c = typeof config === 'string' ? JSON.parse(config.trim().startsWith('{') ? config : readFileSync(config, 'utf8')) : config
+  const mcpServers = {}
+  const bad = []
+  for (const [k, s] of Object.entries(c?.mcpServers ?? {})) {
+    if (!isLocalUrl(s?.url)) bad.push(`${k}=${s?.url ?? '(no url)'}`)
+    else mcpServers[k] = { url: s.url, ...(s.headers && { headers: s.headers }) }
+  }
+  if (bad.length) throw new Error(`refusing to start: non-localhost MCP server(s) for pi: ${bad.join(', ')}`)
+  return { mcpServers }
+}
+
+// Eval mode: write the sandbox agent dir; returns its env and a cleanup.
+function sandbox({ mcpConfig, sandboxHome }) {
+  if (sandboxHome == null) return null
+  if (mcpConfig == null) throw new Error('pi adapter: sandboxHome without mcpConfig (see harness/pi.mjs)')
+  const mcp = piMcpConfig(mcpConfig)
+  const agentDir = join(sandboxHome, '.pi', 'agent')
+  mkdirSync(agentDir, { recursive: true })
+  writeFileSync(join(agentDir, 'mcp.json'), JSON.stringify(mcp, null, 2) + '\n')
+  const realAuth = join(process.env.HOME || homedir(), '.pi', 'agent', 'auth.json')
+  const auth = join(agentDir, 'auth.json')
+  if (existsSync(realAuth)) copyFileSync(realAuth, auth)
+  return { env: { HOME: sandboxHome, PI_CODING_AGENT_DIR: agentDir }, cleanup: () => rmSync(auth, { force: true }) }
+}
 
 export function sessionArgs({ model, systemPrompt }) {
   const a = ['--mode', 'rpc']
@@ -106,11 +158,24 @@ export function createNormalizer() {
 function open(o) {
   const bad = UNSUPPORTED.filter((k) => o[k] != null)
   if (bad.length) throw new Error(`pi adapter: unsupported option(s) ${bad.join(', ')} (see harness/pi.mjs)`)
-  const child = spawn(o.bin || process.env.PI_BIN || 'pi', sessionArgs(o), {
-    cwd: o.cwd,
-    env: { ...process.env, ...o.env },
-    stdio: ['pipe', 'pipe', 'pipe'],
-  })
+  if (o.mcpConfig != null && o.sandboxHome == null)
+    throw new Error('mcpConfig without sandboxHome: pi would still read the real ~/.pi/agent/mcp.json (see harness/pi.mjs)')
+  const box = sandbox(o)
+  let child
+  try {
+    child = spawn(o.bin || process.env.PI_BIN || 'pi', sessionArgs(o), {
+      cwd: o.cwd,
+      env: { ...process.env, ...o.env, ...box?.env },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+  } catch (err) {
+    box?.cleanup()
+    throw err
+  }
+  if (box) {
+    child.on('exit', box.cleanup)
+    child.on('error', box.cleanup)
+  }
   const events = new EventEmitter()
   const norm = createNormalizer()
   // Split on LF only: pi's records may hold U+2028/U+2029, which readline splits on.
