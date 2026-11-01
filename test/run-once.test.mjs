@@ -158,7 +158,7 @@ describe('AC2: watchdog kill and lane cleanup', () => {
 // Runs poll.sh in a fake $HOME with the warm worker down (fake pgrep) and an
 // unreachable queue (fake curl), so it goes straight to the heartbeat spawn.
 // Fake nodes answer -v with their version and record any other argv.
-function pollSh({ env = {}, pathNode } = {}) {
+function pollSh({ env = {}, pathNode, curl = 'exit 7', setup } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'dmn7-poll-'))
   const daemon = join(home, 'fermi-daemon')
   const bin = join(home, 'bin')
@@ -167,7 +167,8 @@ function pollSh({ env = {}, pathNode } = {}) {
   writeFileSync(join(daemon, '.env'), 'FERMI_URL=http://127.0.0.1:9\nFERMI_BEARER_TOKEN=t\n')
   const fake = (path, body) => (writeFileSync(path, `#!/bin/sh\n${body}\n`), chmodSync(path, 0o755), path)
   fake(join(bin, 'pgrep'), 'exit 1')
-  fake(join(bin, 'curl'), 'exit 7')
+  fake(join(bin, 'curl'), curl)
+  setup?.(daemon)
   const node = (name, version) =>
     fake(join(home, name), `[ "$1" = -v ] && { echo ${version}; exit 0; }\nprintf '%s\\n' "$@" > "$FAKE_DIR/${name}.argv"\necho "${name} stderr" >&2`)
   const nodes = { old: node('node14', 'v14.15.1'), new: node('node22', 'v22.3.0') }
@@ -217,5 +218,51 @@ describe('poll.sh node resolution for the cold path', () => {
     assert.deepEqual(r.lanes, ['1'])
     const log = argv[argv.indexOf('--log') + 1]
     assert.match(await waitFor(join(r.daemon, log)), /node22 stderr/)
+  })
+})
+
+describe('poll.sh live-lane count', () => {
+  const pending = (n) => `echo '{"pending":${n}}'`
+  const lanes = (live, stale = []) => (daemon) => {
+    for (const name of live) {
+      mkdirSync(join(daemon, 'lanes', name), { recursive: true })
+      writeFileSync(join(daemon, 'lanes', name, 'pid'), String(process.pid))
+    }
+    for (const name of stale) {
+      mkdirSync(join(daemon, 'lanes', name), { recursive: true })
+      writeFileSync(join(daemon, 'lanes', name, 'pid'), '999999')
+    }
+  }
+  const run = (max, setup) => pollSh({ curl: pending(5), setup, env: (n) => ({ NODE_BIN: n.new, MAX_CONCURRENT: String(max) }) })
+
+  test('empty lanes/ counts 0 live lanes: MAX_CONCURRENT=1 spawns a drain lane', () => {
+    const r = run(1)
+    assert.equal(r.status, 0, r.stderr)
+    assert.match(r.pollLog, /5 pending, spawning 1\n/)
+    assert.match(r.pollLog, /spawned drain\.md in lane 1/)
+    assert.deepEqual(r.lanes, ['1'])
+  })
+
+  test('1 live lane with MAX_CONCURRENT=1: nothing spawns', () => {
+    const r = run(1, lanes(['1']))
+    assert.equal(r.status, 0, r.stderr)
+    assert.doesNotMatch(r.pollLog, /spawn/)
+    assert.deepEqual(r.lanes, ['1'])
+  })
+
+  test('1 live lane with MAX_CONCURRENT=2: spawns 1', () => {
+    const r = run(2, lanes(['1']))
+    assert.equal(r.status, 0, r.stderr)
+    assert.match(r.pollLog, /spawning 1\n/)
+    assert.deepEqual(r.lanes.sort(), ['1', '2'])
+  })
+
+  test('3 live + 2 stale lanes: stale ones are reaped and counted out', () => {
+    const r = run(5, lanes(['1', '2', '3'], ['4', '5']))
+    assert.equal(r.status, 0, r.stderr)
+    assert.match(r.pollLog, /spawning 2\n/)
+    assert.match(r.pollLog, /spawned drain\.md in lane 4/)
+    assert.match(r.pollLog, /spawned drain\.md in lane 5/)
+    for (const l of ['4', '5']) assert.notEqual(readFileSync(join(r.daemon, 'lanes', l, 'pid'), 'utf8').trim(), '999999')
   })
 })
