@@ -54,17 +54,34 @@ const out = createWriteStream(o.log, { flags: 'a' })
 const note = (msg) => out.write(`run-once: ${msg}\n`)
 
 const resume = o.session && existsSync(o.session) ? readFileSync(o.session, 'utf8').trim() : ''
-const harness = await loadHarness()
-const run = harness.runOnce({
-  prompt,
-  cwd: process.cwd(),
-  model: o.model,
-  maxTurns: o['max-turns'] != null ? Number(o['max-turns']) : undefined,
-  allowedTools: ALLOWED_TOOLS,
-  settingSources: SETTING_SOURCES,
-  resume: resume || undefined,
+// A harness that cannot be spawned (missing binary, bad cwd) must leave its reason
+// in the run log: poll.sh discards our stdout/stderr.
+const spawnFailed = (e) => {
+  note(`spawn error: ${e?.message ?? e}`)
+  out.end(() => process.exit(127))
+}
+let run
+try {
+  const harness = await loadHarness()
+  run = harness.runOnce({
+    prompt,
+    cwd: process.cwd(),
+    model: o.model,
+    maxTurns: o['max-turns'] != null ? Number(o['max-turns']) : undefined,
+    allowedTools: ALLOWED_TOOLS,
+    settingSources: SETTING_SOURCES,
+    resume: resume || undefined,
+  })
+} catch (e) {
+  spawnFailed(e)
+  await new Promise(() => {}) // exiting once the log is flushed
+}
+let spawnError = null
+run.events.on('error', (e) => {
+  spawnError = e
+  note(`spawn error: ${e?.message ?? e}`)
 })
-note(`harness pid ${run.pid}`)
+if (run.pid != null) note(`harness pid ${run.pid}`)
 
 let sessionId = null
 run.events.on('raw', (line) => {
@@ -100,5 +117,5 @@ const { code } = await run.done
 clearTimeout(watchdog)
 clearTimeout(killTimer)
 if (o.session && sessionId && !timedOut) writeFileSync(o.session, sessionId + '\n')
-note(`exit ${timedOut ? 'watchdog' : code}`)
-out.end(() => process.exit(timedOut ? 124 : (code ?? 1)))
+note(`exit ${timedOut ? 'watchdog' : spawnError ? 'spawn error' : code}`)
+out.end(() => process.exit(timedOut ? 124 : spawnError ? 127 : (code ?? 1)))
