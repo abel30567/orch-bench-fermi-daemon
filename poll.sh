@@ -29,6 +29,23 @@ rm -f "$DAEMON_HOME/run.lock" 2>/dev/null # legacy single-lock cleanup
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >>logs/poll.log }
 
+# Node for bin/run-once.mjs: $NODE_BIN (from .env), else the first node on PATH.
+# launchd's PATH often lacks a modern node, and this cold path is the fallback
+# for when the warm worker is down, so it must fail loudly rather than spawn a
+# run that dies silently. require_node logs one error line and exits non-zero.
+NODE="${NODE_BIN:-$(command -v node 2>/dev/null)}"
+NODE_MIN_MAJOR=22
+require_node() {
+	local ver="" major=""
+	[[ -n "$NODE" ]] && ver=$("$NODE" -v 2>/dev/null)
+	ver="${ver#v}"
+	major="${ver%%.*}"
+	if [[ "$major" != <-> ]] || (( major < NODE_MIN_MAJOR )); then
+		log "ERROR: node '${NODE:-node}' is v${ver:-?}; bin/run-once.mjs needs node >= $NODE_MIN_MAJOR (set NODE_BIN in .env) — not spawning $1"
+		exit 1
+	fi
+}
+
 now=$(date +%s)
 
 # --- 1. Reap finished/dead/stale lanes --------------------------------------
@@ -86,6 +103,7 @@ acquire_lane() {
 spawn_run() {
 	local prompt_file="$1"
 	shift
+	require_node "$prompt_file"
 	local lane
 	lane=$(acquire_lane) || { log "all $MAX_CONCURRENT lanes busy — deferring $prompt_file"; return 1; }
 	local ts
@@ -95,14 +113,14 @@ spawn_run() {
 	if [[ "$prompt_file" == drain.md ]]; then
 		nohup python3 "$DAEMON_HOME/narrator.py" "runs/$ts.log" >/dev/null 2>&1 &
 	fi
-	nohup node "$DAEMON_HOME/bin/run-once.mjs" \
+	nohup "$NODE" "$DAEMON_HOME/bin/run-once.mjs" \
 		--prompt "prompts/$prompt_file" \
 		--log "runs/$ts.log" \
 		--lane "$lane" \
 		--model "$MODEL" \
 		--max-turns "$MAX_TURNS" \
 		--timeout-s "$MAX_RUN_SECONDS" \
-		"$@" >/dev/null 2>&1 &
+		"$@" >>"runs/$ts.log" 2>&1 &
 	echo $! >"$lane/pid"
 	log "spawned $prompt_file in lane ${lane:t} (pid $(cat "$lane/pid"), log runs/$ts.log)"
 }
