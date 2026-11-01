@@ -52,6 +52,9 @@ error or a non-localhost URL. `--out` defaults to `runs/evals-<timestamp>`.
 6. Dumps state, adds what the fakes recorded (`state.fakes`), and evaluates `expect`.
    A timeout or a `turn_end` with `ok: false` adds a failed assertion, so such an
    attempt never passes.
+   A forwarded MCP stream cut by either side (e.g. the harness's SSE `GET /mcp`
+   when the target shuts down) never crashes the run: the proxy destroys both
+   sides and traces one non-fatal `{ "type": "note", "source": "mcp-proxy", "detail" }`.
 
 Per attempt, `<out>/<scenario>/<n>/` holds `trace.jsonl` (normalized events),
 `raw.log` (native harness output), `state.json`, `mcp.json` and, with
