@@ -235,6 +235,8 @@ export function runOnce(o) {
     }
   })
   events.on('stderr', (s) => (stderr += s))
+  // A spawn failure (missing bin, bad cwd): 'close' still follows, so done resolves.
+  child.on('error', (err) => events.listenerCount('error') && events.emit('error', err))
   const done = new Promise((resolve) => child.on('close', (code) => resolve({ code, outcome, events: all, stderr })))
   send(o.prompt ?? '')
   return { pid: child.pid, events, done, close: (signal) => child.kill(signal) }
