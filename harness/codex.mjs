@@ -378,7 +378,9 @@ export function runOnce(o) {
   events.on('stderr', (s) => (stderr += s))
   norm.start()
   pipe(child, events, (j) => norm.normalize(j).forEach((ev) => events.emit('event', ev)))
-  const done = new Promise((resolve) => child.on('close', (code) => resolve({ code, outcome, events: all, stderr })))
+  let error = null
+  child.on('error', (err) => (error ??= err)) // e.g. ENOENT: the binary could not be spawned
+  const done = new Promise((resolve) => child.on('close', (code) => resolve({ code, outcome, events: all, stderr, error })))
   child.stdin.end(o.prompt ?? '')
   return { pid: child.pid, events, done, close: (signal) => child.kill(signal) }
 }
