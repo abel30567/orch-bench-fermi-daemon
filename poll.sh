@@ -54,7 +54,9 @@ for lane in "$LANE_DIR"/*(N/); do
 		rm -rf "$lane"
 	fi
 done
-live=$(ls -d "$LANE_DIR"/*(N/) 2>/dev/null | wc -l | tr -d ' ')
+# Count with a nullglob array: `ls -d` on an empty match lists "." and counts 1.
+live_lanes=("$LANE_DIR"/*(N/))
+live=${#live_lanes}
 
 # --- 2. Optional run budget guardrail (opt-in via MAX_RUNS_PER_HOUR > 0) -----
 if ((MAX_RUNS_PER_HOUR > 0)); then
