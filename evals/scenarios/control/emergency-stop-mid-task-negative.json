@@ -1,21 +1,21 @@
 {
   "name": "emergency-stop-mid-task-negative",
-  "description": "Negative control: after the stop the scripted session resumes the backup and completes the task done, so the stop assertions must fail.",
+  "description": "Negative control: the stop fires on the first Fermi call after the claim (before mac_shell); after it the scripted session resumes the backup and completes the task done, so the stop assertions must fail.",
   "expectOutcome": "fail",
   "fixtures": {
     "bindings": [{"channel": "sl", "sender_id": "U0EVALOWNER", "note": "owner"}],
     "mac": [{"tool": "mac_shell", "match": "eval-backup\\.sh", "result": "backup: 40% (placeholder output)"}]
   },
   "inbound": {"channel": "sl", "sender": "U0EVALOWNER", "chat": "D0EVAL", "text": "Run the full backup now"},
-  "session": [{"turn": "drain", "interruptAfter": "mac_shell"}, {"turn": "stop"}, {"turn": "keepalive"}],
+  "session": [{"turn": "drain", "interruptAfter": {"afterClaim": true, "ms": 2000}}, {"turn": "stop"}, {"turn": "keepalive"}],
   "expect": [
     {"task.status": "failed"},
     {"argsMatch": {"tool": "task_complete", "args": {"status": "failed", "result": "/stopped by user/i"}}},
     {"argsMatch": {"tool": "channel_send", "args": {"chat_id": "D0EVAL", "text": "/🛑 Stopped/"}}},
-    {"exactlyOnce": "mac_shell"},
+    {"callCount": {"tool": "mac_shell", "max": 1}},
     {"exactlyOnce": "task_complete"},
     {"notCalled": "task_list"},
-    {"outbox.count": {"eq": 2, "chat_id": "D0EVAL"}}
+    {"outbox.count": {"min": 1, "max": 2, "chat_id": "D0EVAL"}}
   ],
   "fake": {
     "turns": [

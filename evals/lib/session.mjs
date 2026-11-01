@@ -6,10 +6,20 @@
 //   "session": [ { "turn": "drain", "interruptAfter": "mac_shell" }, { "turn": "stop" }, { "turn": "keepalive" } ]
 //
 // turn: drain | stop | teams | keepalive (texts below). interruptAfter: call the
-// session's interrupt() as soon as the turn calls that tool, as the control
-// endpoint's POST /abort does. That turn's turn_end is marked `interrupted: true`
-// so the runner does not count it as a harness failure.
+// session's interrupt() as the control endpoint's POST /abort does, either as soon
+// as the turn calls that tool (a tool name), or with { "afterClaim": true, "ms"?: n }
+// on the first Fermi tool call after task_claim, or n ms after task_claim's result,
+// whichever comes first (so the stop does not depend on which tool the model picks).
+// That turn's turn_end is marked `interrupted: true` so the runner does not count
+// it as a harness failure.
 import { EventEmitter } from 'node:events'
+import { isFermiCall } from './assertions.mjs'
+
+// Is `v` a valid interruptAfter (absent, a tool name, or { afterClaim: true, ms? })?
+export const validInterrupt = (v) =>
+  v == null ||
+  (typeof v === 'string' && !!v) ||
+  (!!v && typeof v === 'object' && v.afterClaim === true && Object.keys(v).every((k) => ['afterClaim', 'ms'].includes(k)) && (v.ms == null || (Number.isInteger(v.ms) && v.ms > 0)))
 
 // The turn texts warm-worker.mjs sends (test/evals-control.test.mjs keeps them in sync).
 export const TURNS = {
@@ -34,20 +44,34 @@ const died = (detail) => ({ type: 'turn_end', ok: false, kind: 'unknown_error', 
 function runTurn(session, text, interruptAfter, emit) {
   return new Promise((resolve) => {
     let interrupted = false
+    let claimed = false
+    let timer = null
+    const fire = () => {
+      if (interrupted) return
+      interrupted = true
+      session.interrupt()
+    }
+    const byClaim = interruptAfter && typeof interruptAfter === 'object'
     const onEvent = (ev) => {
       if (ev.type === 'turn_end') {
+        clearTimeout(timer)
         off()
         const end = interrupted ? { ...ev, interrupted: true } : ev
         emit(end)
         return resolve(end)
       }
       emit(ev)
-      if (interruptAfter && !interrupted && ev.type === 'tool_call' && ev.name === interruptAfter) {
-        interrupted = true
-        session.interrupt()
+      if (interrupted || !interruptAfter) return
+      if (!byClaim) {
+        if (ev.type === 'tool_call' && ev.name === interruptAfter) fire()
+        return
       }
+      if (ev.type === 'tool_call' && claimed && isFermiCall(ev)) return fire()
+      if (ev.type === 'tool_call' && ev.name === 'task_claim' && isFermiCall(ev)) claimed = true
+      if (ev.type === 'tool_result' && claimed && interruptAfter.ms != null && !timer) timer = setTimeout(fire, interruptAfter.ms)
     }
     const onExit = (code) => {
+      clearTimeout(timer)
       off()
       const end = died(`session exited (${code}) mid-turn`)
       emit(end)
