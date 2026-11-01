@@ -174,7 +174,8 @@ describe('progress and stuck notes', () => {
     const r = await runBox({ mode: 'slow', env: { FAKE_STALL_MS: '1500', PROGRESS_MS: '100', STUCK_MS: '600' } })
     assert.equal(r.completes[0].status, 'done', r.out)
     assert.ok(r.notes.includes('working: turns=2, last tool=Bash'), r.notes.join('\n'))
-    const stuck = r.notes.filter((n) => n.startsWith('⚠️ possibly stuck'))
+    // turns=2 only: a harness slow to start under load can earn its own stuck note first.
+    const stuck = r.notes.filter((n) => n.startsWith('⚠️ possibly stuck') && n.includes('turns=2'))
     assert.equal(stuck.length, 1, r.notes.join('\n'))
     assert.match(stuck[0], /^⚠️ possibly stuck: no harness output for \d+s \(turns=2, last tool=Bash\)$/)
   })

@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { loadPrompt, placeholders, renderPrompt } from '../lib/prompt.mjs'
-import { ROOT, runWorker } from './run-worker.mjs'
+import { ROOT, runWorker, spawned } from './run-worker.mjs'
 
 const DRAIN = join(ROOT, 'prompts/drain.md')
 const EXAMPLE = join(ROOT, 'prompts/local.example.json')
@@ -93,7 +93,7 @@ describe('AC2: warm-worker refuses to start on a missing key', () => {
   })
 
   test('complete overlay: the harness gets the rendered system prompt', async () => {
-    const r = await runWorker({ result: SUCCESS, pending: 0, durationMs: 1500, prompt: PROMPT, overlay: { OWNER_SENDER: 'U0OWNER' } })
+    const r = await runWorker({ result: SUCCESS, pending: 0, durationMs: 0, prompt: PROMPT, overlay: { OWNER_SENDER: 'U0OWNER' }, act: spawned })
     const argv = r.events.find((e) => e.kind === 'spawn').argv
     assert.equal(argv[argv.indexOf('--append-system-prompt') + 1], 'Owner is U0OWNER.\n')
   })

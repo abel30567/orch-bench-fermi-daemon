@@ -131,7 +131,9 @@ function pipe(child, events, onJson) {
   child.on('exit', (code) => events.emit('exit', code))
   child.on('error', (err) => {
     events.emit('stderr', `codex adapter: ${err.message}\n`)
-    if (child.pid == null) events.emit('exit', null) // never spawned, so no 'exit' follows
+    if (child.pid != null) return
+    events.emit('spawnError', err)
+    events.emit('exit', null) // never spawned, so no 'exit' follows
   })
 }
 

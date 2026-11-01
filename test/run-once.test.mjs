@@ -4,7 +4,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, chmodSync, realpathSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ROOT, runWorker } from './run-worker.mjs'
+import { ROOT, runWorker, spawned } from './run-worker.mjs'
 
 const RUN_ONCE = join(ROOT, 'bin/run-once.mjs')
 const FAKE_ONCE = join(ROOT, 'test/fixtures/fake-claude-once.mjs')
@@ -53,7 +53,7 @@ const flag = (argv, name) => (argv.includes(name) ? argv[argv.indexOf(name) + 1]
 describe('AC1: cold argv has the warm worker\'s settings surface', () => {
   test('setting sources and allowed tools match a live warm spawn; no skip-permissions', async () => {
     const [warm, cold] = await Promise.all([
-      runWorker({ result: SUCCESS, pending: 0, durationMs: 1000 }),
+      runWorker({ result: SUCCESS, pending: 0, durationMs: 0, act: spawned }),
       runOnceCli({ args: ['--model', 'claude-opus-4-6[1m]', '--max-turns', '50', '--timeout-s', '60'] }),
     ])
     const warmArgv = warm.events.find((e) => e.kind === 'spawn').argv
@@ -90,6 +90,32 @@ describe('AC1: cold argv has the warm worker\'s settings surface', () => {
     assert.equal(r.code, 3)
     assert.match(r.log, /boom: harness crashed/)
     assert.ok(r.laneGone)
+  })
+})
+
+describe('spawn failure', () => {
+  const failed = (r, message) => {
+    assert.equal(r.code, 127, r.log)
+    assert.ok(r.log.split('\n').includes(`run-once: spawn error: ${message}`), r.log)
+    assert.doesNotMatch(r.log, /harness pid/)
+    assert.equal(r.spawns.length, 0)
+    assert.ok(r.laneGone)
+  }
+
+  for (const [harness, env] of [['claude-code', 'CLAUDE_BIN'], ['pi', 'PI_BIN'], ['codex', 'CODEX_BIN']]) {
+    test(`${harness}: a missing binary lands in the run log and frees the lane`, async () => {
+      failed(await runOnceCli({ env: { HARNESS: harness, [env]: '/nope' } }), 'spawn /nope ENOENT')
+    })
+  }
+
+  test('a binary that is not executable', async () => {
+    const bin = join(mkdtempSync(join(tmpdir(), 'dmn7-x-')), 'claude')
+    writeFileSync(bin, '')
+    failed(await runOnceCli({ env: { CLAUDE_BIN: bin } }), `spawn ${bin} EACCES`)
+  })
+
+  test('a spawn that throws synchronously (ENOTDIR)', async () => {
+    failed(await runOnceCli({ env: { CLAUDE_BIN: join(RUN_ONCE, 'claude') } }), 'spawn ENOTDIR')
   })
 })
 
