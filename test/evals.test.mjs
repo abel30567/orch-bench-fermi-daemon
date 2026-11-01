@@ -5,7 +5,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ROOT } from './run-worker.mjs'
-import { evaluate, outbound } from '../evals/lib/assertions.mjs'
+import { evaluate, falsePromises, internalToolCalls, outbound } from '../evals/lib/assertions.mjs'
 import { validate } from '../evals/lib/json-schema.mjs'
 import { assertLocalUrls, isLocalUrl } from '../evals/lib/net.mjs'
 import { DRAIN_PROMPT, EVAL_OVERLAY, runAttempt } from '../evals/lib/runner.mjs'
@@ -315,4 +315,43 @@ describe('assertions', () => {
     writeFileSync(f, JSON.stringify({ inbound: { channel: 'sl' }, expect: [{ calledd: 'x' }] }))
     assert.throws(() => loadScenario(f), /inbound needs.*bad assertion/)
   })
+})
+
+describe('grading fidelity (first live baseline triage)', () => {
+  const fermi = (name, input = {}) => ({ type: 'tool_call', name, rawName: `mcp__fermi__${name}`, input })
+  const internal = (name) => ({ type: 'tool_call', name, rawName: name, input: {} })
+  const five = ['task_claim', 'context_bootstrap', 'channel_send', 'task_complete', 'task_claim'].map((n) => fermi(n))
+
+  test('maxToolCalls counts Fermi calls only; internalToolCalls names the rest', () => {
+    const trace = [internal('ToolSearch'), ...five]
+    const check = (n) => evaluate([{ maxToolCalls: n }], { trace, state: {}, scenario: {} })
+    assert.deepEqual(check(5), [])
+    assert.match(check(4)[0].message, /5 Fermi tool calls > 4/)
+    assert.deepEqual(internalToolCalls(trace), ['ToolSearch'])
+    assert.deepEqual(internalToolCalls([...five, internal('Bash'), fermi('channel_send'), { type: 'tool_call', name: 'browser_open', rawName: 'mcp__playwright__browser_open' }]), ['Bash', 'browser_open'])
+  })
+
+  test('a fake run with ToolSearch + 5 Fermi calls passes maxToolCalls: 5 and reports internalToolCalls in results.json', () => {
+    const out = tmp()
+    const r = runCli(['--harness', 'fake', '--scenarios', join(ROOT, 'evals/scenarios/core/drain-stop-on-empty*.json'), '--out', out])
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    const results = readJson(out, 'results.json')
+    const pos = results.find((x) => x.scenario === 'drain-stop-on-empty')
+    assert.equal(pos.pass, true, JSON.stringify(pos.failed))
+    assert.deepEqual(pos.internalToolCalls, ['ToolSearch'])
+    assert.equal(pos.toolCalls.filter((t) => t !== 'ToolSearch').length, 5)
+    for (const x of results) assert.ok(Array.isArray(x.internalToolCalls), x.scenario)
+    assert.deepEqual(validate(SCHEMA, results), [])
+  })
+
+  const FX = readJson(ROOT, 'evals/fixtures/replies/false-promises.json')
+  test("falsePromises: the real Opus reply is clean, \"Done! I'll remind you every Friday\" is not", () => {
+    assert.deepEqual(falsePromises(FX.opus), [])
+    assert.ok(falsePromises("Done! I'll remind you every Friday").length > 0)
+    const send = (text) => ({ trace: [fermi('channel_send', { text })], state: {}, scenario: {} })
+    assert.deepEqual(evaluate([{ noFalsePromise: 'channel_send' }], send(FX.opus)), [])
+    assert.equal(evaluate([{ noFalsePromise: 'channel_send' }], send("Done! I'll remind you every Friday")).length, 1)
+  })
+  for (const text of FX.clean) test(`falsePromises: no claim in ${JSON.stringify(text)}`, () => assert.deepEqual(falsePromises(text), []))
+  for (const text of FX.claims) test(`falsePromises: a claim in ${JSON.stringify(text)}`, () => assert.ok(falsePromises(text).length > 0))
 })
