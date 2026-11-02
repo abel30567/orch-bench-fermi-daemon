@@ -35,6 +35,12 @@
   "fake": {
     "script": [
       {
+        "builtin": "ToolSearch",
+        "args": {
+          "query": "select:mcp__fermi__task_claim"
+        }
+      },
+      {
         "tool": "task_claim",
         "args": {
           "limit": 1,
