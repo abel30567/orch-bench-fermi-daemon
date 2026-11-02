@@ -1,7 +1,8 @@
 // One scenario attempt: fresh fakes + eval target + fault proxy, enqueue the
 // inbound message through the channel webhook, run one drain through the
 // harness adapter with prompts/drain.md (rendered with the eval overlay), then dump state and grade the trace.
-import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadPrompt } from '../../lib/prompt.mjs'
@@ -83,8 +84,18 @@ export async function runAttempt({ scenario, attempt, harness, model, worker, ti
     }
     fakes.setPhase('drain')
 
+    // pi reads its MCP servers (and login) from $HOME/.pi/agent, so it runs in a
+    // throwaway HOME (harness/pi.mjs eval mode), removed with the attempt.
+    // TODO(DMN-22): use the sandbox's HOME once it lands.
+    let sandboxHome
+    if (harness.name === 'pi') {
+      sandboxHome = mkdtempSync(join(tmpdir(), 'fermi-eval-home-'))
+      closers.push(async () => rmSync(sandboxHome, { recursive: true, force: true }))
+    }
+
     const drainPrompt = loadPrompt(DRAIN_PROMPT, EVAL_OVERLAY)
     const harnessOpts = {
+      ...(sandboxHome && { sandboxHome }),
       model,
       cwd: dir,
       mcpConfig: mcpConfigFile,
