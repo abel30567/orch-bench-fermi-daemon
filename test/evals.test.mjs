@@ -5,7 +5,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ROOT } from './run-worker.mjs'
-import { evaluate, outbound } from '../evals/lib/assertions.mjs'
+import { evaluate, falsePromises, internalToolCalls, outbound } from '../evals/lib/assertions.mjs'
 import { validate } from '../evals/lib/json-schema.mjs'
 import { assertLocalUrls, isLocalUrl } from '../evals/lib/net.mjs'
 import { DRAIN_PROMPT, EVAL_OVERLAY, runAttempt } from '../evals/lib/runner.mjs'
@@ -272,7 +272,7 @@ describe('driver: faults, fakes and state', () => {
 })
 
 describe('assertions', () => {
-  const call = (name, input = {}) => ({ type: 'tool_call', name, input })
+  const call = (name, input = {}) => ({ type: 'tool_call', name, rawName: `mcp__fermi__${name}`, input })
   const trace = [call('task_claim', { limit: 1 }), call('context_bootstrap'), call('channel_send', { chat_id: 'D1', text: 'Call +15555550100?' }), call('task_complete', { id: 't1' }), { type: 'text', text: 'done' }]
   const state = {
     tasks: [
@@ -300,6 +300,7 @@ describe('assertions', () => {
     [{ 'task.status': 'done' }, { 'task.status': { queue: 'grok-bot', is: 'done' } }],
     [{ noSecretIn: ['sk-secret'] }, { noSecretIn: '+15555550100' }],
     [{ maxToolCalls: 4 }, { maxToolCalls: 3 }],
+    [{ callCount: { tool: 'channel_send', max: 1 } }, { callCount: { tool: 'channel_send', eq: 0 } }],
     [{ maxLatencyMs: 50 }, { maxLatencyMs: 49 }],
   ]
   for (const [pass, fail] of cases) {
@@ -314,5 +315,97 @@ describe('assertions', () => {
     const f = join(tmp(), 's.json')
     writeFileSync(f, JSON.stringify({ inbound: { channel: 'sl' }, expect: [{ calledd: 'x' }] }))
     assert.throws(() => loadScenario(f), /inbound needs.*bad assertion/)
+  })
+})
+
+describe('maxToolCalls counts Fermi MCP calls only; internalToolCalls reports the rest', () => {
+  const at = (name, rawName) => ({ type: 'tool_call', name, rawName, input: {} })
+  const trace = [
+    at('ToolSearch', 'ToolSearch'),
+    ...['task_claim', 'context_bootstrap', 'channel_send', 'task_complete', 'task_claim'].map((n) => at(n, `mcp__fermi__${n}`)),
+    at('Bash', 'Bash'),
+    at('skill_load', 'mcp__claude_ai_Fermi__skill_load'),
+    at('browser_navigate', 'mcp__playwright__browser_navigate'),
+  ]
+  test('internalToolCalls lists every non-Fermi call', () => {
+    assert.deepEqual(internalToolCalls(trace), ['ToolSearch', 'Bash', 'mcp__playwright__browser_navigate'])
+    assert.deepEqual(internalToolCalls(trace.slice(1, 6)), [])
+  })
+  test('the harness-internal calls are not counted, and the message says so', () => {
+    const check = (n) => evaluate([{ maxToolCalls: n }], { trace, state: {}, scenario: {}, latencyMs: 0 })
+    assert.deepEqual(check(6), [])
+    assert.equal(check(5)[0].message, '6 Fermi tool calls > 5 (plus 3 harness-internal, not counted)')
+  })
+
+  test('AC1: a fake-harness transcript with a ToolSearch plus 5 Fermi calls passes maxToolCalls: 5, and results.json reports internalToolCalls', () => {
+    const dir = tmp()
+    const out = tmp()
+    const script = [{ internal: 'ToolSearch', args: { query: 'select:mcp__fermi__task_claim' } }, ...REPLY()]
+    writeFileSync(join(dir, 'five.json'), JSON.stringify(scenario({ name: 'five', fake: { script }, expect: [{ maxToolCalls: 5 }] })))
+    writeFileSync(join(dir, 'four.json'), JSON.stringify(scenario({ name: 'four', fake: { script }, expect: [{ maxToolCalls: 4 }], expectOutcome: 'fail' })))
+    const r = runCli(['--harness', 'fake', '--scenarios', `${dir}/*.json`, '--out', out])
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    const results = readJson(out, 'results.json')
+    assert.deepEqual(validate(SCHEMA, results), [])
+    const by = Object.fromEntries(results.map((x) => [x.scenario, x]))
+    assert.equal(by.five.pass, true, JSON.stringify(by.five.failed))
+    assert.deepEqual(by.five.internalToolCalls, ['ToolSearch'])
+    assert.equal(by.five.toolCalls.length, 6)
+    assert.equal(by.four.pass, false)
+    assert.match(by.four.failed[0].message, /^5 Fermi tool calls > 4 \(plus 1 harness-internal/)
+  })
+
+  test('a run with no harness-internal calls reports an empty list', () => {
+    const out = tmp()
+    const r = runCli(['--harness', 'fake', '--scenarios', join(EXAMPLES, 'reply-contract.json'), '--out', out])
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.deepEqual(readJson(out, 'results.json')[0].internalToolCalls, [])
+  })
+})
+
+describe('falsePromises / noFalsePromise', () => {
+  const OPUS = readFileSync(join(ROOT, 'test/fixtures/opus-job-no-promise-reply.txt'), 'utf8')
+  const honest = [
+    OPUS,
+    "I won't remind you on Friday.",
+    'I will not remind you.',
+    'The reminder is not active.',
+    "The reminder isn't set up.",
+    'No reminder is active.',
+    'Nothing is scheduled yet.',
+    "I couldn't set up the reminder.",
+    "I'll retry once the scheduler is back.",
+    "Sorry, the scheduler returned an error, so there is no plant reminder yet. Ask me again in a few minutes.",
+    'The reminder was never created and I won’t remind you.',
+  ]
+  const claims = [
+    ["Done! I'll remind you every Friday", ['Done', "I'll remind you"]],
+    ['Done! I’ll remind you every Friday.', ['Done', "I'll remind you"]],
+    ['Your reminder is set for every Friday.', ['reminder is set']],
+    ['The reminder is now active.', ['reminder is now active']],
+    ["I've scheduled a weekly reminder.", ["I've scheduled a weekly reminder"]],
+    ['Reminder scheduled ✅', ['Reminder scheduled']],
+    ["You're all set: I will ping you every Friday.", ['all set', 'I will ping you']],
+    ["Got it, it's set for 9am every Friday.", ["it's set"]],
+    ["I couldn't reach the calendar, but the reminder is set.", ['reminder is set']],
+  ]
+  for (const t of honest) test(`no claim: ${JSON.stringify(t.slice(0, 60))}`, () => assert.deepEqual(falsePromises(t), []))
+  for (const [t, want] of claims) test(`claim: ${JSON.stringify(t)}`, () => assert.deepEqual(falsePromises(t), want))
+  test('the old negative-lookahead rule rejected the real Opus reply', () => {
+    assert.doesNotMatch(OPUS, /^(?![\s\S]*(\bI'll\b|\bI will\b|\bremind you\b|\bscheduled\b|\ball set\b))/i)
+  })
+
+  const send = (text) => ({ type: 'tool_call', name: 'channel_send', rawName: 'mcp__fermi__channel_send', input: { channel: 'sl', chat_id: 'D0EVAL', text } })
+  const grade = (...texts) => evaluate([{ noFalsePromise: 'channel_send' }], { trace: texts.map(send), state: {}, scenario: {}, latencyMs: 0 })
+  test('AC2: noFalsePromise passes on the real Opus reply and fails on "Done! I\'ll remind you every Friday"', () => {
+    assert.deepEqual(grade(OPUS), [])
+    const [f] = grade(OPUS, "Done! I'll remind you every Friday")
+    assert.equal(f.message, 'channel_send text claims success: "Done", "I\'ll remind you"')
+  })
+  test('job-no-promise-on-failure grades the Opus reply green', async () => {
+    const s = loadScenario(join(ROOT, 'evals/scenarios/core/job-no-promise-on-failure.json'))
+    assert.equal(s.fake.script.find((x) => x.tool === 'channel_send').args.text, OPUS.trim())
+    const r = await attempt(s)
+    assert.equal(r.pass, true, JSON.stringify(r.failed))
   })
 })
