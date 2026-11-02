@@ -29,7 +29,7 @@ import { assertLocalUrls } from './net.mjs'
 import { seedFixture, webhookRequest } from './scenario.mjs'
 import { judgeSemantic } from './semantic.mjs'
 import { runSession } from './session.mjs'
-import { startWranglerTarget } from './wrangler-target.mjs'
+import { seedFixture as wranglerSeedFixture, startWranglerTarget } from './wrangler-target.mjs'
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url))
 export const DRAIN_PROMPT = join(ROOT, 'prompts/drain.md')
@@ -216,7 +216,7 @@ async function attemptOnce({ scenario, attempt, harness, model, worker, timeoutM
     const target = worker ? await startWranglerTarget({ worker, env, logDir: dir }) : await startFakeTarget({ env, tools: fixtures?.tools })
     closers.push(target.close)
     assertLocalUrls({ target: target.url })
-    await target.seed(seedFixture(fixtures, scenario.inbound))
+    await target.seed((worker ? wranglerSeedFixture : seedFixture)(fixtures, scenario.inbound))
     await seedSecrets(target.url, fixtures?.secrets)
     const proxy = await startMcpProxy({
       target: target.url,
