@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, chmodSync, realpathSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, chmodSync, realpathSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ROOT, runWorker } from './run-worker.mjs'
@@ -157,8 +157,10 @@ describe('AC2: watchdog kill and lane cleanup', () => {
 
 // Runs poll.sh in a fake $HOME with the warm worker down (fake pgrep) and an
 // unreachable queue (fake curl), so it goes straight to the heartbeat spawn.
-// Fake nodes answer -v with their version and record any other argv.
-function pollSh({ env = {}, pathNode } = {}) {
+// With `pending`, fake curl reports that many queued tasks instead. `setup(daemon)`
+// runs before poll.sh (e.g. to pre-create lanes). Fake nodes answer -v with
+// their version and record any other argv.
+function pollSh({ env = {}, pathNode, pending, setup } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'dmn7-poll-'))
   const daemon = join(home, 'fermi-daemon')
   const bin = join(home, 'bin')
@@ -167,7 +169,8 @@ function pollSh({ env = {}, pathNode } = {}) {
   writeFileSync(join(daemon, '.env'), 'FERMI_URL=http://127.0.0.1:9\nFERMI_BEARER_TOKEN=t\n')
   const fake = (path, body) => (writeFileSync(path, `#!/bin/sh\n${body}\n`), chmodSync(path, 0o755), path)
   fake(join(bin, 'pgrep'), 'exit 1')
-  fake(join(bin, 'curl'), 'exit 7')
+  fake(join(bin, 'curl'), pending === undefined ? 'exit 7' : `echo '{"pending":${pending}}'`)
+  setup?.(daemon)
   const node = (name, version) =>
     fake(join(home, name), `[ "$1" = -v ] && { echo ${version}; exit 0; }\nprintf '%s\\n' "$@" > "$FAKE_DIR/${name}.argv"\necho "${name} stderr" >&2`)
   const nodes = { old: node('node14', 'v14.15.1'), new: node('node22', 'v22.3.0') }
@@ -217,5 +220,74 @@ describe('poll.sh node resolution for the cold path', () => {
     assert.deepEqual(r.lanes, ['1'])
     const log = argv[argv.indexOf('--log') + 1]
     assert.match(await waitFor(join(r.daemon, log)), /node22 stderr/)
+  })
+})
+
+// Each lane is lanes/<n>/pid. `live` lanes point at a running process; `dead`
+// ones at an exited pid; `orphan` ones have no pid and an mtime > 30s old.
+function makeLanes(daemon, { live = 0, dead = 0, orphan = 0 }) {
+  const sleepers = []
+  let n = 0
+  const lane = () => {
+    const dir = join(daemon, 'lanes', String(++n))
+    mkdirSync(dir, { recursive: true })
+    return dir
+  }
+  for (let i = 0; i < live; i++) {
+    const child = spawn('sleep', ['30'], { stdio: 'ignore' })
+    sleepers.push(child)
+    writeFileSync(join(lane(), 'pid'), String(child.pid))
+  }
+  for (let i = 0; i < dead; i++) {
+    const done = spawnSync('sh', ['-c', 'echo $$'], { encoding: 'utf8' })
+    writeFileSync(join(lane(), 'pid'), done.stdout.trim())
+  }
+  for (let i = 0; i < orphan; i++) {
+    const dir = lane()
+    const old = new Date(Date.now() - 120_000)
+    utimesSync(dir, old, old)
+  }
+  return sleepers
+}
+
+// Drain fallback with 10 pending: poll.sh spawns MAX_CONCURRENT - live workers,
+// so the "spawning N" log line exposes its live-lane count.
+function drainWith(lanes, max) {
+  let sleepers = []
+  const r = pollSh({
+    pending: 10,
+    env: (n) => ({ NODE_BIN: n.new, MAX_CONCURRENT: String(max) }),
+    setup: (daemon) => {
+      mkdirSync(join(daemon, 'lanes'))
+      sleepers = makeLanes(daemon, lanes)
+    },
+  })
+  for (const s of sleepers) s.kill()
+  return { ...r, spawned: Number(r.pollLog.match(/spawning (\d+)/)?.[1] ?? 0) }
+}
+
+describe('poll.sh live-lane count', () => {
+  test('empty lanes/ counts 0 live lanes: MAX_CONCURRENT=1 spawns a drain lane', () => {
+    const r = drainWith({}, 1)
+    assert.equal(r.status, 0, r.stderr)
+    assert.equal(r.spawned, 1, r.pollLog)
+    assert.match(r.pollLog, /spawned drain\.md in lane 1/)
+    assert.deepEqual(r.lanes, ['1'])
+  })
+
+  for (const live of [0, 1, 3]) {
+    test(`${live} live lane(s) plus stale ones: stale are reaped, ${live} counted`, () => {
+      const r = drainWith({ live, dead: 1, orphan: 1 }, 5)
+      assert.equal(r.status, 0, r.stderr)
+      assert.equal(r.spawned, 5 - live, r.pollLog)
+      assert.equal(r.lanes.length, 5, `lanes: ${r.lanes}`)
+    })
+  }
+
+  test('all lanes live: nothing spawns', () => {
+    const r = drainWith({ live: 1 }, 1)
+    assert.equal(r.status, 0, r.stderr)
+    assert.doesNotMatch(r.pollLog, /spawn/)
+    assert.deepEqual(r.lanes, ['1'])
   })
 })
