@@ -1,0 +1,3 @@
+#!/bin/sh
+# warm worker is down
+exit 1
