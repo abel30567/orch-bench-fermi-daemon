@@ -1,0 +1,7 @@
+#!/bin/sh
+# poll.test.mjs's node stand-in, symlinked per test: reports the version in
+# <link>.version, records its argv in <link>.argv and writes to stderr.
+read v < "$0.version"
+[ "$1" = --version ] && { echo "v$v"; exit 0; }
+printf '%s\n' "$@" > "$0.argv"
+echo "fake node $v ran" >&2

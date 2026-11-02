@@ -1,0 +1,3 @@
+#!/bin/sh
+# one pending task
+echo '{"pending":1}'

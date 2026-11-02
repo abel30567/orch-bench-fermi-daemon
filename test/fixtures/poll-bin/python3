@@ -1,0 +1,3 @@
+#!/bin/sh
+# narrator stand-in
+exit 0
