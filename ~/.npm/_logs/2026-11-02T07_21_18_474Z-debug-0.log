@@ -1,0 +1,24 @@
+0 verbose cli /Users/claudioatilano/.nvm/versions/node/v23.11.0/bin/node /Users/claudioatilano/.nvm/versions/node/v23.11.0/bin/npm
+1 info using npm@10.9.2
+2 info using node@v23.11.0
+3 silly config load:file:/Users/claudioatilano/.nvm/versions/node/v23.11.0/lib/node_modules/npm/npmrc
+4 silly config load:file:/private/var/folders/g1/nj_4qy4577l_lw4kfyj06qh00000gn/T/hbar-orch-ZI0Twn/a-0rCz75/work/.npmrc
+5 silly config load:file:/private/var/folders/g1/nj_4qy4577l_lw4kfyj06qh00000gn/T/hbar-orch-ZI0Twn/a-0rCz75/work/~/.npmrc
+6 silly config load:file:/Users/claudioatilano/.nvm/versions/node/v23.11.0/etc/npmrc
+7 verbose title npm test
+8 verbose argv "test"
+9 verbose logfile logs-max:10 dir:/private/var/folders/g1/nj_4qy4577l_lw4kfyj06qh00000gn/T/hbar-orch-ZI0Twn/a-0rCz75/work/~/.npm/_logs/2026-11-02T07_21_18_474Z-
+10 verbose logfile /private/var/folders/g1/nj_4qy4577l_lw4kfyj06qh00000gn/T/hbar-orch-ZI0Twn/a-0rCz75/work/~/.npm/_logs/2026-11-02T07_21_18_474Z-debug-0.log
+11 silly logfile done cleaning log files
+12 http fetch GET 200 https://registry.npmjs.org/npm 156ms
+13 verbose cwd /private/var/folders/g1/nj_4qy4577l_lw4kfyj06qh00000gn/T/hbar-orch-ZI0Twn/a-0rCz75/work
+14 verbose os Darwin 23.5.0
+15 verbose node v23.11.0
+16 verbose npm  v10.9.2
+17 notice
+17 notice New major version of npm available! 10.9.2 -> 12.2.1
+17 notice Changelog: https://github.com/npm/cli/releases/tag/v12.2.1
+17 notice To update run: npm install -g npm@12.2.1
+17 notice  { force: true, [Symbol(proc-log.meta)]: true }
+18 verbose exit 1
+19 verbose code 1
