@@ -1,6 +1,6 @@
 {
   "name": "job-no-promise-on-failure-neg",
-  "description": "Negative control for job-no-promise-on-failure: schedule_create fails but the reply still promises the reminder.",
+  "description": "Negative control for job-no-promise-on-failure: schedule_create fails but the reply still claims the reminder is set: Done! I'll remind you every Friday.",
   "expectOutcome": "fail",
   "fixtures": {
     "bindings": [
@@ -30,13 +30,7 @@
       "exactlyOnce": "channel_send"
     },
     {
-      "argsMatch": {
-        "tool": "channel_send",
-        "every": true,
-        "args": {
-          "text": "/^(?![\\s\\S]*(\\bI'll\\b|\\bI will\\b|\\bremind you\\b|\\bscheduled\\b|\\ball set\\b))/i"
-        }
-      }
+      "noFalsePromise": "channel_send"
     },
     {
       "task.status": "failed"

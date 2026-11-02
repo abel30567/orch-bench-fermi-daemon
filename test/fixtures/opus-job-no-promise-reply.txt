@@ -1,0 +1,1 @@
+Sorry — I couldn't set up the reminder. The scheduler returned an error (scheduler_unavailable), so no reminder is active and I won't remind you on Fridays. Send it again in a few minutes and I'll retry.

@@ -3,13 +3,20 @@
 // stop that interrupts a turn mid-task, a Teams message (a warm turn, not a queue
 // task), and the session still answering afterwards. A scenario opts in with
 //
-//   "session": [ { "turn": "drain", "interruptAfter": "mac_shell" }, { "turn": "stop" }, { "turn": "keepalive" } ]
+//   "session": [ { "turn": "drain", "interruptAfter": { "afterClaim": true, "ms": 15000 } }, { "turn": "stop" }, { "turn": "keepalive" } ]
 //
-// turn: drain | stop | teams | keepalive (texts below). interruptAfter: call the
-// session's interrupt() as soon as the turn calls that tool, as the control
-// endpoint's POST /abort does. That turn's turn_end is marked `interrupted: true`
-// so the runner does not count it as a harness failure.
+// turn: drain | stop | teams | keepalive (texts below). interruptAfter: when to
+// call the session's interrupt(), as the control endpoint's POST /abort does:
+//   "<tool>"                     as soon as the turn calls that tool
+//   { afterClaim: true, ms? }    on the first Fermi tool call after a task_claim
+//                                that returned a task, or `ms` after that claim,
+//                                whichever comes first; the model's next step is
+//                                not assumed
+//   { ms }                       `ms` after the turn was sent
+// That turn's turn_end is marked `interrupted: true` so the runner does not count
+// it as a harness failure.
 import { EventEmitter } from 'node:events'
+import { isFermiCall } from './assertions.mjs'
 
 // The turn texts warm-worker.mjs sends (test/evals-control.test.mjs keeps them in sync).
 export const TURNS = {
@@ -30,10 +37,40 @@ export const TURNS = {
 
 const died = (detail) => ({ type: 'turn_end', ok: false, kind: 'unknown_error', detail, durationMs: 0, raw: null })
 
+export const validInterrupt = (i) =>
+  i == null ||
+  (typeof i === 'string' && !!i) ||
+  (!!i &&
+    typeof i === 'object' &&
+    Object.keys(i).every((k) => ['afterClaim', 'ms'].includes(k)) &&
+    (i.afterClaim === undefined || typeof i.afterClaim === 'boolean') &&
+    (i.ms === undefined || (Number.isInteger(i.ms) && i.ms >= 0)) &&
+    (i.afterClaim === true || i.ms !== undefined))
+
+// Did this task_claim result hand out a task? A result that is not JSON is taken as a claim.
+const claimedTask = (content) => {
+  try {
+    return (JSON.parse(content).tasks?.length ?? 0) > 0
+  } catch {
+    return true
+  }
+}
+
 // One turn: send `text`, forward its events, interrupt on `interruptAfter`; resolves with its turn_end.
 function runTurn(session, text, interruptAfter, emit) {
   return new Promise((resolve) => {
     let interrupted = false
+    let timer = null
+    let claimed = false
+    const claims = new Set() // ids of task_claim calls in flight
+    const spec = typeof interruptAfter === 'object' ? interruptAfter : null
+    const interrupt = () => {
+      if (interrupted) return
+      interrupted = true
+      clearTimeout(timer)
+      session.interrupt()
+    }
+    const startClock = () => spec?.ms != null && (timer ??= setTimeout(interrupt, spec.ms))
     const onEvent = (ev) => {
       if (ev.type === 'turn_end') {
         off()
@@ -42,9 +79,17 @@ function runTurn(session, text, interruptAfter, emit) {
         return resolve(end)
       }
       emit(ev)
-      if (interruptAfter && !interrupted && ev.type === 'tool_call' && ev.name === interruptAfter) {
-        interrupted = true
-        session.interrupt()
+      if (!interruptAfter || interrupted) return
+      if (typeof interruptAfter === 'string') {
+        if (ev.type === 'tool_call' && ev.name === interruptAfter) interrupt()
+        return
+      }
+      if (!spec.afterClaim) return
+      if (ev.type === 'tool_call' && claimed && isFermiCall(ev)) return interrupt()
+      if (ev.type === 'tool_call' && ev.name === 'task_claim' && isFermiCall(ev)) claims.add(ev.id)
+      if (ev.type === 'tool_result' && claims.delete(ev.id) && ev.ok && claimedTask(ev.content)) {
+        claimed = true
+        startClock()
       }
     }
     const onExit = (code) => {
@@ -54,9 +99,11 @@ function runTurn(session, text, interruptAfter, emit) {
       resolve(end)
     }
     const off = () => {
+      clearTimeout(timer)
       session.events.off('event', onEvent)
       session.events.off('exit', onExit)
     }
+    if (spec && !spec.afterClaim) startClock()
     session.events.on('event', onEvent)
     session.events.on('exit', onExit)
     session.send(text)
