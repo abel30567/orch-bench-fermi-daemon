@@ -110,7 +110,9 @@ function runStats(results) {
     p95LatencyMs: percentile(lat, 0.95),
     // Unknown when any attempt has no cost: a partial mean would understate it.
     costPerTaskUsd: costs.length && costs.every((c) => c != null) ? mean(costs) : null,
-    toolCallsPerTask: mean(g.map((r) => r.toolCalls?.length ?? 0)),
+    // Fermi calls; the harness's own (ToolSearch loading deferred tools, …) are counted apart.
+    toolCallsPerTask: mean(g.map((r) => (r.toolCalls?.length ?? 0) - (r.internalToolCalls?.length ?? 0))),
+    internalToolCallsPerTask: mean(g.map((r) => r.internalToolCalls?.length ?? 0)),
     errorKinds,
     protocolViolations: g.filter((r) => (r.failed ?? []).some((f) => f.assertion && PROTOCOL_ASSERTIONS.includes(Object.keys(f.assertion)[0]))).length,
   }
@@ -222,7 +224,8 @@ export function renderMarkdown(report) {
     `| p50 latency (ms) | ${num(stats.baseline.p50LatencyMs, 0)} | ${num(stats.candidate.p50LatencyMs, 0)} | ${times(ratios.p50Latency)} |`,
     `| p95 latency (ms) | ${num(stats.baseline.p95LatencyMs, 0)} | ${num(stats.candidate.p95LatencyMs, 0)} | ${times(ratios.p95Latency)} |`,
     `| cost per task (USD) | ${num(stats.baseline.costPerTaskUsd, 4)} | ${num(stats.candidate.costPerTaskUsd, 4)} | ${times(ratios.cost)} |`,
-    `| tool calls per task | ${num(stats.baseline.toolCallsPerTask)} | ${num(stats.candidate.toolCallsPerTask)} | ${times(ratios.toolCalls)} |`,
+    `| Fermi tool calls per task | ${num(stats.baseline.toolCallsPerTask)} | ${num(stats.candidate.toolCallsPerTask)} | ${times(ratios.toolCalls)} |`,
+    `| internal tool calls per task (ToolSearch, …) | ${num(stats.baseline.internalToolCallsPerTask)} | ${num(stats.candidate.internalToolCallsPerTask)} | ${times(ratio(stats.candidate.internalToolCallsPerTask, stats.baseline.internalToolCallsPerTask))} |`,
     `| protocol violations | ${stats.baseline.protocolViolations} | ${stats.candidate.protocolViolations} | |`,
     '',
     '## Error kinds',
