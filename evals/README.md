@@ -40,6 +40,11 @@ error or a non-localhost URL. `--out` defaults to `runs/evals-<timestamp>`.
 3. Starts a fault-injecting MCP proxy in front of the target's `/mcp`. The
    harness gets an MCP config with that proxy as the only server, `fermi`, so
    its tools are `mcp__fermi__*`, plus `ENABLE_CLAUDEAI_MCP_SERVERS=false`.
+   pi reads its servers from `~/.pi/agent/mcp.json` (the production Fermi), so
+   it runs with `HOME` set to a temp sandbox (`sandboxHome`) whose
+   `.pi/agent/mcp.json` holds only that proxy, plus a copy of the real
+   `auth.json` that is deleted when pi exits (`harness/pi.mjs`). A
+   non-localhost server refuses to start.
 4. Enqueues `inbound` through the channel webhook, the same way the bridge does.
 5. Runs one drain through the adapter (`runOnce`, `prompts/drain.md` as the
    prompt, rendered with the eval overlay `fixtures/prompt-overlay.json`: owner
