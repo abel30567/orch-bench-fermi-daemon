@@ -1,0 +1,31 @@
+{
+  "name": "audio-transcribe-negative",
+  "description": "Negative control: the scripted drain replies that it cannot listen to audio without running transcribe.sh, so the transcription assertions must fail.",
+  "expectOutcome": "fail",
+  "fixtures": {
+    "bindings": [{"channel": "sl", "sender_id": "U0EVALOWNER", "note": "owner"}],
+    "transcript": "What is the capital of France?",
+    "mac": [
+      {"tool": "mac_shell", "match": "tools/transcribe\\.sh", "result": "What is the capital of France?"},
+      {"tool": "mac_shell", "match": "\\bfind\\b[^|;&]*media", "result": "/Users/eval/fermi-daemon/media/eval-voice-note.m4a"},
+      {"tool": "mac_shell", "match": "\\b(ls|stat|file)\\b[^|;&]*media", "result": "-rw-r--r--  1 eval  staff  48213 Oct 22 22:30 eval-voice-note.m4a"}
+    ]
+  },
+  "inbound": {"channel": "sl", "sender": "U0EVALOWNER", "chat": "D0EVAL", "text": "", "attachment": {"kind": "audio", "file": "eval-voice-note.m4a"}},
+  "expect": [
+    {"argsMatch": {"tool": ["Bash", "bash", "mac_shell", "execute"], "args": "/tools\\/transcribe\\.sh\\s+\\S*media\\/eval-voice-note\\.m4a/"}},
+    {"order": ["task_claim", {"tool": ["Bash", "bash", "mac_shell", "execute"], "args": "/transcribe\\.sh/"}, {"tool": "channel_send", "args": {"text": "/capital|France/i"}}, "task_complete"]},
+    {"notCalled": "secret_resolve"},
+    {"outbox.count": {"min": 1, "max": 2, "chat_id": "D0EVAL"}},
+    {"task.status": "done"}
+  ],
+  "fake": {
+    "script": [
+      {"tool": "task_claim", "args": {"limit": 1, "stale_minutes": 25}},
+      {"tool": "context_bootstrap", "args": {"channel": "${task.channel}", "chat_id": "${task.chat_id}"}},
+      {"tool": "channel_send", "args": {"channel": "${task.channel}", "chat_id": "${task.chat_id}", "text": "Sorry, I can't listen to audio messages."}},
+      {"tool": "task_complete", "args": {"id": "${task.id}", "status": "done", "result": "could not transcribe"}},
+      {"tool": "task_claim", "args": {"limit": 1, "stale_minutes": 25}}
+    ]
+  }
+}
