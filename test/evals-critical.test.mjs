@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { ROOT } from './run-worker.mjs'
 import { runAttempt } from '../evals/lib/runner.mjs'
 import { expandVariants, loadScenario, seedFixture } from '../evals/lib/scenario.mjs'
+import { seedFixture as wranglerSeedFixture } from '../evals/lib/wrangler-target.mjs'
 import * as fake from '../evals/harness/fake.mjs'
 import { cardNumbers } from '../evals/lib/assertions.mjs'
 
@@ -155,5 +156,15 @@ describe('DMN-11 runner support', () => {
   test('seedFixture places history in the inbound chat', () => {
     const f = seedFixture({ history: [{ role: 'user', text: 'x' }] }, { channel: 'wa', chat: '15555550100' })
     assert.deepEqual([f.history[0].channel, f.history[0].chat_id], ['wa', '15555550100'])
+  })
+
+  test('the wrangler seed fixture carries history as the MCP-24 conversation section', () => {
+    const history = [{ role: 'user', text: 'call them', minutes_ago: 3 }, { role: 'assistant', text: 'Reply yes to place the call.' }]
+    const group = { channel: 'wa', sender: '15555550112', chat: '120363000000000000@g.us', text: 'yes' }
+    const f = wranglerSeedFixture({ bindings: OWNER, history }, group)
+    assert.equal('history' in f, false)
+    assert.deepEqual(f.conversation, { channel: 'wa', chat_id: '120363000000000000@g.us', sender: '15555550112', history })
+    assert.deepEqual(f.allowlist, OWNER)
+    assert.equal('conversation' in wranglerSeedFixture({ bindings: OWNER }, group), false)
   })
 })
