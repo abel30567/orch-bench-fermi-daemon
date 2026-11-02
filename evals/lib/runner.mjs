@@ -26,10 +26,10 @@ import { startFakeTarget } from './fake-target.mjs'
 import { startFakes } from './fakes.mjs'
 import { startMcpProxy } from './mcp-proxy.mjs'
 import { assertLocalUrls } from './net.mjs'
-import { seedFixture, webhookRequest } from './scenario.mjs'
+import { webhookRequest } from './scenario.mjs'
 import { judgeSemantic } from './semantic.mjs'
 import { runSession } from './session.mjs'
-import { startWranglerTarget } from './wrangler-target.mjs'
+import { seedFixture, startWranglerTarget } from './wrangler-target.mjs'
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url))
 export const DRAIN_PROMPT = join(ROOT, 'prompts/drain.md')
