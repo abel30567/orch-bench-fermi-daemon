@@ -270,9 +270,9 @@ posts no webhook.
 entry. A variant's `inbound` and `fixtures` are merged key by key over the
 base's, and it is graded with the base's `expect` and `fake`.
 
-`fixtures.history` is the inbound chat's prior transcript. eval-seed.mjs cannot
-seed it yet, so the wrangler target refuses such scenarios rather than grading
-them without their history.
+`fixtures.history` (`[{ role, text, minutes_ago? }]`) is the inbound chat's
+prior transcript. It is seeded as eval-seed.mjs's (MCP-24) `conversation`
+section in the inbound's channel and chat, with the inbound's sender.
 
 `fake.negative` is a scripted misbehaviour. `--fake-script negative` plays it
 instead of `fake.script` and expects every attempt to fail.
