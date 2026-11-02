@@ -23,8 +23,10 @@ HEARTBEAT_SECONDS="${HEARTBEAT_SECONDS:-1800}"
 MAX_TURNS="${MAX_TURNS:-50}"
 MODEL="${MODEL:-claude-opus-4-6[1m]}"        # model for daemon claude -p runs (1M-context Opus 4.6)
 # Allowed tools and setting sources match the warm worker (lib/run-policy.mjs).
+NODE_BIN="${NODE_BIN:-}"                     # node for bin/run-once.mjs; default: `command -v node`
+NODE_MIN_MAJOR=22
 LANE_DIR="$DAEMON_HOME/lanes"
-mkdir -p "$LANE_DIR"
+mkdir -p "$LANE_DIR" logs runs
 rm -f "$DAEMON_HOME/run.lock" 2>/dev/null # legacy single-lock cleanup
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >>logs/poll.log }
@@ -54,7 +56,8 @@ for lane in "$LANE_DIR"/*(N/); do
 		rm -rf "$lane"
 	fi
 done
-live=$(ls -d "$LANE_DIR"/*(N/) 2>/dev/null | wc -l | tr -d ' ')
+live_lanes=("$LANE_DIR"/*(N/)) # not `ls -d | wc -l`: with no lanes, `ls -d` lists "." and counts 1
+live=${#live_lanes}
 
 # --- 2. Optional run budget guardrail (opt-in via MAX_RUNS_PER_HOUR > 0) -----
 if ((MAX_RUNS_PER_HOUR > 0)); then
@@ -79,13 +82,33 @@ acquire_lane() {
 	return 1
 }
 
+# The cold path is the fallback for when the warm worker is down, so it must not
+# fail silently: resolve node ($NODE_BIN, else PATH) and require a major version
+# >= NODE_MIN_MAJOR. On failure, log one clear error line and exit non-zero
+# before claiming a lane or spawning anything.
+require_node() {
+	local prompt_file="$1"
+	local node="${NODE_BIN:-$(command -v node 2>/dev/null)}"
+	local version="" major=""
+	[[ -n "$node" && -x "$node" ]] && version=$("$node" -v 2>/dev/null)
+	version="${version#v}"
+	major="${version%%.*}"
+	if [[ "$major" != <-> ]] || (( major < NODE_MIN_MAJOR )); then
+		log "ERROR: node '${node:-node}' is v${version:-?}; bin/run-once.mjs needs node >= $NODE_MIN_MAJOR (set NODE_BIN in .env) — not spawning $prompt_file"
+		exit 1
+	fi
+	NODE_BIN="$node"
+}
+
 # Detached nohup spawn from the clean dir (EINTR-safe) of bin/run-once.mjs,
 # which runs the harness, enforces the MAX_RUN_SECONDS watchdog and removes the
-# lane on exit. Only heartbeat runs pass --session (resume from and store
+# lane on exit; its own stdout/stderr (e.g. a crash) is appended to the run
+# log. Only heartbeat runs pass --session (resume from and store
 # session.id): concurrent drain runs must not race on it.
 spawn_run() {
 	local prompt_file="$1"
 	shift
+	require_node "$prompt_file"
 	local lane
 	lane=$(acquire_lane) || { log "all $MAX_CONCURRENT lanes busy — deferring $prompt_file"; return 1; }
 	local ts
@@ -95,14 +118,14 @@ spawn_run() {
 	if [[ "$prompt_file" == drain.md ]]; then
 		nohup python3 "$DAEMON_HOME/narrator.py" "runs/$ts.log" >/dev/null 2>&1 &
 	fi
-	nohup node "$DAEMON_HOME/bin/run-once.mjs" \
+	nohup "$NODE_BIN" "$DAEMON_HOME/bin/run-once.mjs" \
 		--prompt "prompts/$prompt_file" \
 		--log "runs/$ts.log" \
 		--lane "$lane" \
 		--model "$MODEL" \
 		--max-turns "$MAX_TURNS" \
 		--timeout-s "$MAX_RUN_SECONDS" \
-		"$@" >/dev/null 2>&1 &
+		"$@" >>"runs/$ts.log" 2>&1 &
 	echo $! >"$lane/pid"
 	log "spawned $prompt_file in lane ${lane:t} (pid $(cat "$lane/pid"), log runs/$ts.log)"
 }
