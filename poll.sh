@@ -11,7 +11,7 @@ DAEMON_HOME="$HOME/fermi-daemon"
 cd "$DAEMON_HOME" || exit 1
 # NOTE: do not export ANTHROPIC_API_KEY here — claude prefers it over the
 # Max login and it disables claude.ai connectors (Fermi tools) entirely.
-source ./.env # FERMI_URL, FERMI_BEARER_TOKEN (+ optional overrides below)
+source ./.env # FERMI_URL, FERMI_BEARER_TOKEN (+ optional overrides below, e.g. NODE_BIN)
 
 MAX_CONCURRENT="${MAX_CONCURRENT:-5}"        # parallel drain lanes
 MAX_RUN_SECONDS="${MAX_RUN_SECONDS:-1200}"   # per-lane watchdog (20min). Long enough for real
@@ -24,10 +24,29 @@ MAX_TURNS="${MAX_TURNS:-50}"
 MODEL="${MODEL:-claude-opus-4-6[1m]}"        # model for daemon claude -p runs (1M-context Opus 4.6)
 # Allowed tools and setting sources match the warm worker (lib/run-policy.mjs).
 LANE_DIR="$DAEMON_HOME/lanes"
-mkdir -p "$LANE_DIR"
+mkdir -p "$LANE_DIR" logs runs
+# Node for bin/run-once.mjs: launchd's PATH often lacks (or has an old) node, so
+# NODE_BIN in .env wins; otherwise whatever node is on PATH.
+NODE="${NODE_BIN:-$(command -v node)}"
+NODE="${NODE:-node}"
+NODE_MIN_MAJOR=22
 rm -f "$DAEMON_HOME/run.lock" 2>/dev/null # legacy single-lock cleanup
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >>logs/poll.log }
+
+# The cold path is the fallback for when the warm worker is down, so it must
+# not fail silently: with no usable node, log one clear error and exit non-zero
+# before claiming a lane or spawning anything.
+require_node() {
+	local prompt_file="$1" version major
+	version=$("$NODE" --version 2>/dev/null)
+	version="${version#v}"
+	major="${version%%.*}"
+	if [[ "$major" != <-> ]] || (( major < NODE_MIN_MAJOR )); then
+		log "ERROR: node '$NODE' is v${version:-unknown}; bin/run-once.mjs needs node >= $NODE_MIN_MAJOR (set NODE_BIN in .env) — not spawning $prompt_file"
+		exit 1
+	fi
+}
 
 now=$(date +%s)
 
@@ -86,6 +105,7 @@ acquire_lane() {
 spawn_run() {
 	local prompt_file="$1"
 	shift
+	require_node "$prompt_file"
 	local lane
 	lane=$(acquire_lane) || { log "all $MAX_CONCURRENT lanes busy — deferring $prompt_file"; return 1; }
 	local ts
@@ -95,14 +115,14 @@ spawn_run() {
 	if [[ "$prompt_file" == drain.md ]]; then
 		nohup python3 "$DAEMON_HOME/narrator.py" "runs/$ts.log" >/dev/null 2>&1 &
 	fi
-	nohup node "$DAEMON_HOME/bin/run-once.mjs" \
+	nohup "$NODE" "$DAEMON_HOME/bin/run-once.mjs" \
 		--prompt "prompts/$prompt_file" \
 		--log "runs/$ts.log" \
 		--lane "$lane" \
 		--model "$MODEL" \
 		--max-turns "$MAX_TURNS" \
 		--timeout-s "$MAX_RUN_SECONDS" \
-		"$@" >/dev/null 2>&1 &
+		"$@" >>"runs/$ts.log" 2>&1 &
 	echo $! >"$lane/pid"
 	log "spawned $prompt_file in lane ${lane:t} (pid $(cat "$lane/pid"), log runs/$ts.log)"
 }
