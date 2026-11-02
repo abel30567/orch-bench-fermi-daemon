@@ -54,7 +54,9 @@ export function loadScenario(file) {
   if (s.schedule != null && s.schedule !== 'weekly') errs.push('schedule must be "weekly"')
   const sess = s.session
   if (Array.isArray(sess) ? !sess.length || sess.some((t) => !TURNS[t?.turn]) : sess != null && (typeof sess !== 'object' || ['tasks', 'redrain'].some((k) => sess[k] != null && !(Number.isInteger(sess[k]) && sess[k] >= 0))))
-    errs.push(`session must be a non-empty list of { turn: ${Object.keys(TURNS).join(' | ')}, interruptAfter? } or { tasks?, redrain? } with non-negative integers`)
+    errs.push(`session must be a non-empty list of { turn: ${Object.keys(TURNS).join(' | ')}, interruptAfter?, interruptAfterClaim? } or { tasks?, redrain? } with non-negative integers`)
+  const claimTrigger = (c) => c == null || c === true || (typeof c === 'object' && Object.keys(c).every((k) => k === 'ms') && (c.ms == null || (Number.isInteger(c.ms) && c.ms > 0)))
+  if (Array.isArray(sess) && sess.some((t) => !claimTrigger(t?.interruptAfterClaim))) errs.push('interruptAfterClaim must be true or { ms: positive integer }')
   if (inb?.via != null && !['webhook', 'task'].includes(inb.via)) errs.push('inbound.via must be "webhook" or "task"')
   if (s.variants != null) {
     const names = (Array.isArray(s.variants) ? s.variants : []).map((v) => v?.name)
