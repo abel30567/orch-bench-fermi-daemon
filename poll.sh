@@ -13,6 +13,11 @@ cd "$DAEMON_HOME" || exit 1
 # Max login and it disables claude.ai connectors (Fermi tools) entirely.
 source ./.env # FERMI_URL, FERMI_BEARER_TOKEN (+ optional overrides below)
 
+# Node for the cold path: $NODE_BIN from .env, else whatever is on PATH (often
+# nothing, or a stale system node, under launchd's minimal PATH).
+NODE="${NODE_BIN:-$(command -v node 2>/dev/null)}"
+NODE_MIN_MAJOR=22
+
 MAX_CONCURRENT="${MAX_CONCURRENT:-5}"        # parallel drain lanes
 MAX_RUN_SECONDS="${MAX_RUN_SECONDS:-1200}"   # per-lane watchdog (20min). Long enough for real
                                              # work (repo edits, multi-step jobs); safe because the
@@ -66,6 +71,20 @@ if ((MAX_RUNS_PER_HOUR > 0)); then
 fi
 
 # --- 3. Lane helpers --------------------------------------------------------
+# The cold path is the fallback for a dead warm worker, so it must never fail
+# silently: a missing or too-old node logs one error line and exits non-zero
+# before any lane is claimed or process spawned.
+require_node() {
+	local prompt_file="$1" version="" major=""
+	[[ -n "$NODE" ]] && version=$("$NODE" --version 2>/dev/null)
+	version="${version#v}"
+	major="${version%%.*}"
+	if [[ "$major" != <-> ]] || (( major < NODE_MIN_MAJOR )); then
+		log "ERROR: node '${NODE:-node}' is v${version:-unknown}; bin/run-once.mjs needs node >= $NODE_MIN_MAJOR (set NODE_BIN in .env) — not spawning $prompt_file"
+		exit 1
+	fi
+}
+
 # Atomically claim a free lane 1..MAX_CONCURRENT via mkdir (race-safe across
 # concurrent poll.sh invocations). Echoes the lane path, or nothing if full.
 acquire_lane() {
@@ -86,6 +105,7 @@ acquire_lane() {
 spawn_run() {
 	local prompt_file="$1"
 	shift
+	require_node "$prompt_file"
 	local lane
 	lane=$(acquire_lane) || { log "all $MAX_CONCURRENT lanes busy — deferring $prompt_file"; return 1; }
 	local ts
@@ -95,14 +115,16 @@ spawn_run() {
 	if [[ "$prompt_file" == drain.md ]]; then
 		nohup python3 "$DAEMON_HOME/narrator.py" "runs/$ts.log" >/dev/null 2>&1 &
 	fi
-	nohup node "$DAEMON_HOME/bin/run-once.mjs" \
+	# run-once's own stdout/stderr (e.g. a crash before it opens its log) are
+	# appended to the run log too, never discarded.
+	nohup "$NODE" "$DAEMON_HOME/bin/run-once.mjs" \
 		--prompt "prompts/$prompt_file" \
 		--log "runs/$ts.log" \
 		--lane "$lane" \
 		--model "$MODEL" \
 		--max-turns "$MAX_TURNS" \
 		--timeout-s "$MAX_RUN_SECONDS" \
-		"$@" >/dev/null 2>&1 &
+		"$@" >>"runs/$ts.log" 2>&1 &
 	echo $! >"$lane/pid"
 	log "spawned $prompt_file in lane ${lane:t} (pid $(cat "$lane/pid"), log runs/$ts.log)"
 }
