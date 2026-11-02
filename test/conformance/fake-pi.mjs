@@ -12,11 +12,14 @@
 //     $FAKE_DIR/cred.json, run a bash-tool child (inheriting the environment, as
 //     pi's bash tool does) that dumps its environment to $FAKE_DIR/child-env.json,
 //     and stream that tool execution.
+// At startup, with FAKE_DIR and PI_CODING_AGENT_DIR set (eval mode), it records
+// the config pi would load to $FAKE_DIR/pi-config.json: HOME, the agent dir and
+// its mcp.json and auth.json. (Never the real ~/.pi/agent of whoever runs the tests.)
 // An abort ends the in-flight run the way pi does: an aborted assistant message,
 // then agent_end and agent_settled, then the abort response.
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createInterface } from 'node:readline'
@@ -62,6 +65,15 @@ const aborted = {
   stopReason: 'aborted',
   errorMessage: 'Request was aborted',
   timestamp: 0,
+}
+
+if (process.env.FAKE_DIR && process.env.PI_CODING_AGENT_DIR) {
+  const agentDir = process.env.PI_CODING_AGENT_DIR
+  const read = (f) => (existsSync(join(agentDir, f)) ? readFileSync(join(agentDir, f), 'utf8') : null)
+  writeFileSync(
+    join(process.env.FAKE_DIR, 'pi-config.json'),
+    JSON.stringify({ home: process.env.HOME, agentDir, mcp: read('mcp.json'), auth: read('auth.json') }),
+  )
 }
 
 createInterface({ input: process.stdin })
