@@ -152,8 +152,10 @@ describe('DMN-11 runner support', () => {
     assert.throws(() => loadScenario(f), /inbound\.via.*variants must be/)
   })
 
-  test('seedFixture places history in the inbound chat', () => {
-    const f = seedFixture({ history: [{ role: 'user', text: 'x' }] }, { channel: 'wa', chat: '15555550100' })
-    assert.deepEqual([f.history[0].channel, f.history[0].chat_id], ['wa', '15555550100'])
+  test('seedFixture seeds history as the inbound chat conversation', () => {
+    const f = seedFixture({ history: [{ role: 'user', text: 'x', minutes_ago: 3 }] }, { channel: 'wa', sender: '15555550112', chat: '120363000000000000@g.us' })
+    assert.equal(f.history, undefined)
+    assert.deepEqual(f.conversation, { channel: 'wa', chat_id: '120363000000000000@g.us', sender: '15555550112', history: [{ role: 'user', text: 'x', minutes_ago: 3 }] })
+    assert.equal(seedFixture({}, { channel: 'wa', sender: 's', chat: 'c' }).conversation, undefined)
   })
 })
