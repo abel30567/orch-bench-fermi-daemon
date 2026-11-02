@@ -3,13 +3,19 @@
 // stop that interrupts a turn mid-task, a Teams message (a warm turn, not a queue
 // task), and the session still answering afterwards. A scenario opts in with
 //
-//   "session": [ { "turn": "drain", "interruptAfter": "mac_shell" }, { "turn": "stop" }, { "turn": "keepalive" } ]
+//   "session": [ { "turn": "drain", "interruptAfterClaim": { "ms": 30000 } }, { "turn": "stop" }, { "turn": "keepalive" } ]
 //
-// turn: drain | stop | teams | keepalive (texts below). interruptAfter: call the
-// session's interrupt() as soon as the turn calls that tool, as the control
-// endpoint's POST /abort does. That turn's turn_end is marked `interrupted: true`
-// so the runner does not count it as a harness failure.
+// turn: drain | stop | teams | keepalive (texts below). The session's interrupt()
+// is called, as the control endpoint's POST /abort does,
+//   interruptAfter: "<tool>"   as soon as the turn calls that tool;
+//   interruptAfterClaim: true | { ms }
+//                              once a task_claim result holds a task: at the turn's
+//                              next Fermi tool call, or `ms` after the claim,
+//                              whichever comes first (whatever the model does next).
+// That turn's turn_end is marked `interrupted: true` so the runner does not count
+// it as a harness failure.
 import { EventEmitter } from 'node:events'
+import { isFermiCall } from './assertions.mjs'
 
 // The turn texts warm-worker.mjs sends (test/evals-control.test.mjs keeps them in sync).
 export const TURNS = {
@@ -30,10 +36,21 @@ export const TURNS = {
 
 const died = (detail) => ({ type: 'turn_end', ok: false, kind: 'unknown_error', detail, durationMs: 0, raw: null })
 
-// One turn: send `text`, forward its events, interrupt on `interruptAfter`; resolves with its turn_end.
-function runTurn(session, text, interruptAfter, emit) {
+const CLAIMED = /"tasks"\s*:\s*\[\s*\{/
+
+// One turn: send `text`, forward its events, interrupt as the turn spec says; resolves with its turn_end.
+function runTurn(session, text, { interruptAfter, interruptAfterClaim } = {}, emit) {
   return new Promise((resolve) => {
     let interrupted = false
+    let timer
+    const claims = new Set() // ids of the turn's task_claim calls
+    let claimed = false
+    const interrupt = () => {
+      if (interrupted) return
+      interrupted = true
+      clearTimeout(timer)
+      session.interrupt()
+    }
     const onEvent = (ev) => {
       if (ev.type === 'turn_end') {
         off()
@@ -42,9 +59,14 @@ function runTurn(session, text, interruptAfter, emit) {
         return resolve(end)
       }
       emit(ev)
-      if (interruptAfter && !interrupted && ev.type === 'tool_call' && ev.name === interruptAfter) {
-        interrupted = true
-        session.interrupt()
+      if (interrupted) return
+      if (interruptAfter && ev.type === 'tool_call' && ev.name === interruptAfter) return interrupt()
+      if (!interruptAfterClaim) return
+      if (claimed && isFermiCall(ev)) return interrupt()
+      if (isFermiCall(ev) && ev.name === 'task_claim') claims.add(ev.id)
+      if (ev.type === 'tool_result' && ev.ok && claims.has(ev.id) && CLAIMED.test(ev.content ?? '')) {
+        claimed = true
+        if (interruptAfterClaim.ms != null) timer = setTimeout(interrupt, interruptAfterClaim.ms)
       }
     }
     const onExit = (code) => {
@@ -54,6 +76,7 @@ function runTurn(session, text, interruptAfter, emit) {
       resolve(end)
     }
     const off = () => {
+      clearTimeout(timer)
       session.events.off('event', onEvent)
       session.events.off('exit', onExit)
     }
@@ -85,7 +108,7 @@ export function runSession(harness, opts, { turns, inbound }) {
         emit((outcome = died(`session died before turn ${i + 1} (${t.turn})`)))
         break
       }
-      outcome = await runTurn(session, TURNS[t.turn](inbound), t.interruptAfter, emit)
+      outcome = await runTurn(session, TURNS[t.turn](inbound), t, emit)
     }
     session.close()
     return { code: outcome?.ok ? 0 : 1, outcome, events: all, stderr: '' }
