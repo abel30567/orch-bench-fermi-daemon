@@ -30,7 +30,7 @@ const runCli = (args) => {
 const NEGATIVES = {
   'cancelled-by-user-negative': ['task.status', 'argsMatch', 'outbox.count', 'argsMatch'],
   'model-switch-ordering-negative': ['order'],
-  'emergency-stop-mid-task-negative': ['task.status', 'argsMatch', 'argsMatch', 'exactlyOnce'],
+  'emergency-stop-mid-task-negative': ['task.status', 'argsMatch', 'argsMatch', 'notCalled'],
   'teams-reply-shell-negative': ['exactlyOnce', 'argsMatch', 'notCalled', 'notCalled'],
   'audio-transcribe-negative': ['argsMatch', 'order'],
   'deferred-schedule-list-negative': ['order'],
@@ -74,20 +74,57 @@ describe('DMN-13 AC1: the control pack passes against the fake harness, every sc
 })
 
 describe('session mode (evals/lib/session.mjs)', () => {
-  test('emergency stop: the turn is interrupted after the in-flight tool, cleanup and a later turn run in the same session', async () => {
+  test('emergency stop: the turn is interrupted at the first Fermi call after the claim, with no mac_shell; cleanup and a later turn run in the same session', async () => {
     const out = tmp()
     const scenario = loadScenario(join(CONTROL, 'emergency-stop-mid-task.json'))
+    assert.ok(!JSON.stringify(scenario.fake.turns[0]).includes('mac_shell'), 'the drain turn never calls mac_shell')
     const r = await runAttempt({ scenario, attempt: 1, harness: fake, timeoutMs: 10_000, outDir: out })
     assert.equal(r.pass, true, JSON.stringify(r.failed))
     const trace = readTrace(out, scenario.name, '1', 'trace.jsonl')
     const ends = trace.filter((e) => e.type === 'turn_end')
     assert.deepEqual(ends.map((e) => [e.ok, e.interrupted ?? false]), [[false, true], [true, false], [true, false]])
     assert.equal(trace.filter((e) => e.type === 'init').length, 1) // one session, not three
-    // The steps scripted after the interrupted mac_shell never ran.
+    // The stop fired on context_bootstrap, the first call after the claim; nothing scripted after it ran.
     const first = trace.slice(0, trace.indexOf(ends[0]))
+    assert.deepEqual(first.filter((e) => e.type === 'tool_call').map((e) => e.name), ['task_claim', 'context_bootstrap'])
     assert.equal(first.at(-1).type, 'tool_result')
-    assert.ok(!first.some((e) => e.type === 'tool_call' && e.name === 'task_complete'))
+    assert.ok(!trace.some((e) => e.type === 'tool_call' && e.name === 'mac_shell'))
     assert.deepEqual(trace.filter((e) => e.type === 'text').map((e) => e.text), ['OK'])
+  })
+
+  test('interruptAfterClaim: { ms } stops a turn that makes no tool call after the claim', async () => {
+    const out = tmp()
+    const base = loadScenario(join(CONTROL, 'emergency-stop-mid-task.json'))
+    const thinking = [{ tool: 'task_claim', args: { limit: 1, stale_minutes: 25 } }, { sleepMs: 600 }, { text: 'Which backup do you mean?' }]
+    const scenario = {
+      ...base,
+      session: [{ turn: 'drain', interruptAfterClaim: { ms: 100 } }, ...base.session.slice(1)],
+      fake: { turns: [thinking, ...base.fake.turns.slice(1)] },
+    }
+    const r = await runAttempt({ scenario, attempt: 1, harness: fake, timeoutMs: 10_000, outDir: out })
+    assert.equal(r.pass, true, JSON.stringify(r.failed))
+    const trace = readTrace(out, scenario.name, '1', 'trace.jsonl')
+    const ends = trace.filter((e) => e.type === 'turn_end')
+    assert.equal(ends[0].interrupted, true)
+    // Interrupted during the sleep: the text after it never came.
+    assert.ok(!trace.some((e) => e.type === 'text' && /Which backup/.test(e.text)))
+  })
+
+  test('interruptAfterClaim ignores harness-internal calls and calls before the claim returned', async () => {
+    const out = tmp()
+    const base = loadScenario(join(CONTROL, 'emergency-stop-mid-task.json'))
+    const drain = [
+      { internal: 'ToolSearch', args: { query: 'select:mcp__fermi__task_claim' } },
+      { tool: 'task_claim', args: { limit: 1, stale_minutes: 25 } },
+      { internal: 'ToolSearch', args: { query: 'select:mcp__fermi__context_bootstrap' } },
+      ...base.fake.turns[0].slice(1),
+    ]
+    const scenario = { ...base, fake: { turns: [drain, ...base.fake.turns.slice(1)] } }
+    const r = await runAttempt({ scenario, attempt: 1, harness: fake, timeoutMs: 10_000, outDir: out })
+    assert.equal(r.pass, true, JSON.stringify(r.failed))
+    const trace = readTrace(out, scenario.name, '1', 'trace.jsonl')
+    const first = trace.slice(0, trace.indexOf(trace.find((e) => e.type === 'turn_end')))
+    assert.deepEqual(first.filter((e) => e.type === 'tool_call').map((e) => e.name), ['ToolSearch', 'task_claim', 'ToolSearch', 'context_bootstrap'])
   })
 
   test('the session gets the rendered drain.md as its system prompt and the warm-worker turn texts in order', async () => {
@@ -159,6 +196,8 @@ describe('session mode (evals/lib/session.mjs)', () => {
     assert.throws(() => loadScenario(join(dir, 'a.json')), /teams inbound needs a session with a teams turn/)
     writeFileSync(join(dir, 'b.json'), JSON.stringify({ ...bad, session: [{ turn: 'nope' }] }))
     assert.throws(() => loadScenario(join(dir, 'b.json')), /session must be a non-empty list/)
+    writeFileSync(join(dir, 'c.json'), JSON.stringify({ ...bad, session: [{ turn: 'teams', interruptAfterClaim: { ms: -1 } }] }))
+    assert.throws(() => loadScenario(join(dir, 'c.json')), /session must be a non-empty list/)
   })
 
   test('the Teams scenarios are fake-only: another harness skips them, not fails, and summary.json lists the skips', () => {
