@@ -3,13 +3,20 @@
 // stop that interrupts a turn mid-task, a Teams message (a warm turn, not a queue
 // task), and the session still answering afterwards. A scenario opts in with
 //
-//   "session": [ { "turn": "drain", "interruptAfter": "mac_shell" }, { "turn": "stop" }, { "turn": "keepalive" } ]
+//   "session": [ { "turn": "drain", "interruptAfter": { "firstCallAfter": "task_claim", "ms": 30000 } }, { "turn": "stop" }, { "turn": "keepalive" } ]
 //
-// turn: drain | stop | teams | keepalive (texts below). interruptAfter: call the
-// session's interrupt() as soon as the turn calls that tool, as the control
-// endpoint's POST /abort does. That turn's turn_end is marked `interrupted: true`
-// so the runner does not count it as a harness failure.
+// turn: drain | stop | teams | keepalive (texts below). interruptAfter: when to call
+// the session's interrupt(), as the control endpoint's POST /abort does:
+//   "<tool>"                       as soon as the turn calls that tool
+//   { firstCallAfter: "<tool>", ms? }
+//                                  on the first Fermi tool call after that tool's call
+//                                  (the harness's own tools, such as ToolSearch, do not
+//                                  count), or `ms` after that call, whichever comes first
+//   { ms }                         `ms` after the turn starts
+// That turn's turn_end is marked `interrupted: true` so the runner does not count it
+// as a harness failure.
 import { EventEmitter } from 'node:events'
+import { isFermiCall } from './assertions.mjs'
 
 // The turn texts warm-worker.mjs sends (test/evals-control.test.mjs keeps them in sync).
 export const TURNS = {
@@ -32,8 +39,18 @@ const died = (detail) => ({ type: 'turn_end', ok: false, kind: 'unknown_error', 
 
 // One turn: send `text`, forward its events, interrupt on `interruptAfter`; resolves with its turn_end.
 function runTurn(session, text, interruptAfter, emit) {
+  const spec = typeof interruptAfter === 'string' ? { tool: interruptAfter } : (interruptAfter ?? {})
   return new Promise((resolve) => {
     let interrupted = false
+    let after = false // the firstCallAfter tool has been called
+    let timer = null
+    const interrupt = () => {
+      if (interrupted) return
+      interrupted = true
+      clearTimeout(timer)
+      session.interrupt()
+    }
+    const startTimer = () => spec.ms != null && (timer = setTimeout(interrupt, spec.ms))
     const onEvent = (ev) => {
       if (ev.type === 'turn_end') {
         off()
@@ -42,9 +59,12 @@ function runTurn(session, text, interruptAfter, emit) {
         return resolve(end)
       }
       emit(ev)
-      if (interruptAfter && !interrupted && ev.type === 'tool_call' && ev.name === interruptAfter) {
-        interrupted = true
-        session.interrupt()
+      if (interrupted || ev.type !== 'tool_call') return
+      if (spec.tool) {
+        if (ev.name === spec.tool) interrupt()
+      } else if (spec.firstCallAfter && isFermiCall(ev)) {
+        if (after) interrupt()
+        else if (ev.name === spec.firstCallAfter) (after = true), startTimer()
       }
     }
     const onExit = (code) => {
@@ -54,12 +74,14 @@ function runTurn(session, text, interruptAfter, emit) {
       resolve(end)
     }
     const off = () => {
+      clearTimeout(timer)
       session.events.off('event', onEvent)
       session.events.off('exit', onExit)
     }
     session.events.on('event', onEvent)
     session.events.on('exit', onExit)
     session.send(text)
+    if (!spec.tool && !spec.firstCallAfter) startTimer()
   })
 }
 

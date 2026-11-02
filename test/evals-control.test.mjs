@@ -30,7 +30,7 @@ const runCli = (args) => {
 const NEGATIVES = {
   'cancelled-by-user-negative': ['task.status', 'argsMatch', 'outbox.count', 'argsMatch'],
   'model-switch-ordering-negative': ['order'],
-  'emergency-stop-mid-task-negative': ['task.status', 'argsMatch', 'argsMatch', 'exactlyOnce'],
+  'emergency-stop-mid-task-negative': ['task.status', 'argsMatch', 'argsMatch', 'notCalled'],
   'teams-reply-shell-negative': ['exactlyOnce', 'argsMatch', 'notCalled', 'notCalled'],
   'audio-transcribe-negative': ['argsMatch', 'order'],
   'deferred-schedule-list-negative': ['order'],
@@ -83,11 +83,42 @@ describe('session mode (evals/lib/session.mjs)', () => {
     const ends = trace.filter((e) => e.type === 'turn_end')
     assert.deepEqual(ends.map((e) => [e.ok, e.interrupted ?? false]), [[false, true], [true, false], [true, false]])
     assert.equal(trace.filter((e) => e.type === 'init').length, 1) // one session, not three
-    // The steps scripted after the interrupted mac_shell never ran.
+    // The stop fired on the first Fermi call after the claim (context_bootstrap), with no mac_shell
+    // anywhere; the steps scripted after it (a clarifying question, task_complete) never ran.
     const first = trace.slice(0, trace.indexOf(ends[0]))
+    assert.deepEqual(first.filter((e) => e.type === 'tool_call').map((e) => e.name), ['task_claim', 'context_bootstrap'])
     assert.equal(first.at(-1).type, 'tool_result')
-    assert.ok(!first.some((e) => e.type === 'tool_call' && e.name === 'task_complete'))
+    assert.ok(!trace.some((e) => e.type === 'tool_call' && e.name === 'mac_shell'))
     assert.deepEqual(trace.filter((e) => e.type === 'text').map((e) => e.text), ['OK'])
+  })
+
+  // A drain turn played by the fake harness under `interruptAfter`; → the tool calls before the interrupt.
+  const interruptedCalls = async (interruptAfter, steps) => {
+    const scenario = {
+      ...loadScenario(join(CONTROL, 'emergency-stop-mid-task.json')),
+      session: [{ turn: 'drain', interruptAfter }],
+      fake: { turns: [steps] },
+    }
+    const out = tmp()
+    await runAttempt({ scenario, attempt: 1, harness: fake, timeoutMs: 10_000, outDir: out })
+    const trace = readTrace(out, scenario.name, '1', 'trace.jsonl')
+    const end = trace.find((e) => e.type === 'turn_end')
+    return { interrupted: end.interrupted ?? false, calls: trace.filter((e) => e.type === 'tool_call').map((e) => e.name) }
+  }
+  const claim = { tool: 'task_claim', args: { limit: 1, stale_minutes: 25 } }
+  const send = { tool: 'channel_send', args: { channel: '${task.channel}', chat_id: '${task.chat_id}', text: 'Which backup?' } }
+
+  test('firstCallAfter: the stop fires on whatever Fermi tool comes first after the claim; harness-internal tools do not trigger it', async () => {
+    const toolSearch = { internal: 'ToolSearch', args: { query: 'select:mcp__fermi__channel_send' } }
+    assert.deepEqual(await interruptedCalls({ firstCallAfter: 'task_claim' }, [claim, toolSearch, send, { tool: 'task_list' }]), {
+      interrupted: true,
+      calls: ['task_claim', 'ToolSearch', 'channel_send'],
+    })
+  })
+
+  test('firstCallAfter with ms: the stop fires that long after the claim when no Fermi call follows', async () => {
+    const r = await interruptedCalls({ firstCallAfter: 'task_claim', ms: 50 }, [claim, { sleepMs: 300 }, send])
+    assert.deepEqual(r, { interrupted: true, calls: ['task_claim'] })
   })
 
   test('the session gets the rendered drain.md as its system prompt and the warm-worker turn texts in order', async () => {
