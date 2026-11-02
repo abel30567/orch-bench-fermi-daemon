@@ -5,10 +5,11 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, readdirSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ROOT } from './run-worker.mjs'
+import { evaluate, falsePromises, internalToolCalls } from '../evals/lib/assertions.mjs'
 import { coreTools, PROFILE_BUDGETS } from '../evals/lib/fake-target-tools.mjs'
 import { loadScenario } from '../evals/lib/scenario.mjs'
 
@@ -95,5 +96,56 @@ describe('core pack under the fake harness', () => {
         assert.ok(res.failed.every((f) => f.assertion !== null), `${res.scenario}: ${JSON.stringify(res.failed)}`)
       } else assert.equal(res.pass, true, `${res.scenario}: ${JSON.stringify(res.failed)}`)
     }
+  })
+})
+
+// Grading fixes from the first live Claude Code baseline triage.
+describe('live baseline grading fixes', () => {
+  const tmp = () => mkdtempSync(join(tmpdir(), 'dmn12-'))
+  const runCli = (args) => spawnSync(process.execPath, ['--import', PRELOAD, join(ROOT, 'evals/run.mjs'), ...args], { cwd: ROOT, env, encoding: 'utf8', timeout: 60_000 })
+
+  test('maxToolCalls counts Fermi calls only: one ToolSearch plus 5 Fermi calls passes maxToolCalls 5, and results.json reports it', () => {
+    const s = structuredClone(all['drain-stop-on-empty'])
+    assert.deepEqual(s.expect.find((a) => a.maxToolCalls), { maxToolCalls: 5 })
+    assert.equal(s.fake.script.length, 5)
+    s.fake.script.unshift({ internal: 'ToolSearch', args: { query: 'select:mcp__fermi__task_claim' }, result: 'loaded' })
+    const dir = tmp()
+    writeFileSync(join(dir, 'drain-stop-on-empty.json'), JSON.stringify(s))
+    const out = tmp()
+    const r = runCli(['--harness', 'fake', '--scenarios', join(dir, 'drain-stop-on-empty.json'), '--out', out])
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    const [res] = JSON.parse(readFileSync(join(out, 'results.json'), 'utf8'))
+    assert.equal(res.pass, true, JSON.stringify(res.failed))
+    assert.deepEqual(res.toolCalls, ['ToolSearch', 'task_claim', 'context_bootstrap', 'channel_send', 'task_complete', 'task_claim'])
+    assert.deepEqual(res.internalToolCalls, ['ToolSearch'])
+  })
+
+  test('a sixth Fermi call still breaks maxToolCalls 5; internalToolCalls names only non-Fermi calls', () => {
+    const call = (rawName) => ({ type: 'tool_call', name: rawName.replace(/^mcp__.+?__/, ''), rawName, input: {} })
+    const fermi = Array.from({ length: 5 }, () => call('mcp__fermi__task_claim'))
+    const ctx = (trace) => ({ trace, state: {}, scenario: {}, latencyMs: 0 })
+    assert.deepEqual(evaluate([{ maxToolCalls: 5 }], ctx([call('ToolSearch'), ...fermi])), [])
+    assert.match(evaluate([{ maxToolCalls: 5 }], ctx([...fermi, call('mcp__claude_ai_Fermi__channel_send')]))[0].message, /6 Fermi tool calls > 5/)
+    assert.deepEqual(internalToolCalls([call('ToolSearch'), call('Bash'), ...fermi, call('mcp__claude_ai_Fermi__task_complete'), { type: 'text', text: 'x' }]), ['ToolSearch', 'Bash'])
+    // Hand-built traces without rawName are Fermi calls.
+    assert.deepEqual(internalToolCalls([{ type: 'tool_call', name: 'task_claim', input: {} }]), [])
+  })
+
+  test('falsePromises: the real Opus reply and negated phrasings pass, false claims of success fail', () => {
+    const fx = JSON.parse(readFileSync(join(ROOT, 'evals/fixtures/false-promises.json'), 'utf8'))
+    assert.deepEqual(falsePromises(fx.baseline.text), [])
+    for (const t of ["won't remind", 'is not active', "I'll retry"]) assert.ok(fx.noFalsePromise.some((x) => x.includes(t)), `no fixture with "${t}"`)
+    for (const t of fx.noFalsePromise) assert.deepEqual(falsePromises(t), [], t)
+    for (const t of fx.falsePromise) assert.ok(falsePromises(t).length, `not caught: ${t}`)
+    assert.deepEqual(falsePromises("Done! I'll remind you every Friday"), ["I'll remind you every Friday"])
+  })
+
+  test('noFalsePromise grades the outbound messages', () => {
+    const fx = JSON.parse(readFileSync(join(ROOT, 'evals/fixtures/false-promises.json'), 'utf8'))
+    const state = (text) => ({ outbox: [{ channel: 'sl', chat_id: 'D0EVAL', body: text }] })
+    const grade = (text) => evaluate([{ noFalsePromise: true }], { trace: [], state: state(text), scenario: {}, latencyMs: 0 })
+    assert.deepEqual(grade(fx.baseline.text), [])
+    assert.match(grade("Done! I'll remind you every Friday")[0].message, /1 false success claim/)
+    assert.equal(all['job-no-promise-on-failure'].fake.script.find((s) => s.tool === 'channel_send').args.text, fx.baseline.text)
   })
 })
