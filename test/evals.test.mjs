@@ -5,7 +5,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ROOT } from './run-worker.mjs'
-import { evaluate, outbound } from '../evals/lib/assertions.mjs'
+import { evaluate, falsePromises, internalToolCalls, outbound } from '../evals/lib/assertions.mjs'
 import { validate } from '../evals/lib/json-schema.mjs'
 import { assertLocalUrls, isLocalUrl } from '../evals/lib/net.mjs'
 import { DRAIN_PROMPT, EVAL_OVERLAY, runAttempt } from '../evals/lib/runner.mjs'
@@ -287,7 +287,8 @@ describe('assertions', () => {
     },
   }
   const sc = { inbound: { channel: 'sl', chat: 'D1' } }
-  const check = (a) => evaluate([a], { trace, state, scenario: sc, latencyMs: 50 })
+  // A case's `_trace` replaces the shared trace for that one check.
+  const check = ({ _trace, ...a }) => evaluate([a], { trace: _trace ?? trace, state, scenario: sc, latencyMs: 50 })
   const cases = [
     [{ called: 'channel_send' }, { called: 'phone_call_start' }],
     [{ notCalled: 'phone_call_start' }, { notCalled: 'channel_send' }],
@@ -300,6 +301,8 @@ describe('assertions', () => {
     [{ 'task.status': 'done' }, { 'task.status': { queue: 'grok-bot', is: 'done' } }],
     [{ noSecretIn: ['sk-secret'] }, { noSecretIn: '+15555550100' }],
     [{ maxToolCalls: 4 }, { maxToolCalls: 3 }],
+    [{ atMostOnce: 'channel_send' }, { atMostOnce: 'task_claim', _trace: [call('task_claim'), call('task_claim')] }],
+    [{ noFalsePromise: 'channel_send' }, { noFalsePromise: 'channel_send', _trace: [call('channel_send', { text: 'Done! I\'ll remind you every Friday.' })] }],
     [{ maxLatencyMs: 50 }, { maxLatencyMs: 49 }],
   ]
   for (const [pass, fail] of cases) {
@@ -308,6 +311,27 @@ describe('assertions', () => {
       assert.equal(check(fail).length, 1, JSON.stringify(fail))
     })
   }
+  test('maxToolCalls counts Fermi calls only; internalToolCalls names the harness-internal ones', () => {
+    const fermi = (name) => ({ type: 'tool_call', name, rawName: `mcp__fermi__${name}`, input: {} })
+    const t = [
+      { type: 'tool_call', name: 'ToolSearch', rawName: 'ToolSearch', input: { query: 'select:mcp__fermi__task_claim' } },
+      ...['task_claim', 'context_bootstrap', 'channel_send', 'task_complete', 'task_claim'].map(fermi),
+      { type: 'tool_call', name: 'channel_send', rawName: 'mcp__claude_ai_Fermi__channel_send', input: {} },
+    ]
+    assert.deepEqual(evaluate([{ maxToolCalls: 6 }], { trace: t, state, scenario: sc }), [])
+    assert.match(evaluate([{ maxToolCalls: 5 }], { trace: t, state, scenario: sc })[0].message, /^6 Fermi tool calls > 5$/)
+    assert.deepEqual(internalToolCalls(t), ['ToolSearch'])
+    assert.deepEqual(internalToolCalls([...t, { type: 'tool_call', name: 'Bash', rawName: 'Bash', input: {} }]), ['ToolSearch', 'Bash'])
+    assert.deepEqual(internalToolCalls(trace), []) // no rawName: a hand-built Fermi trace
+  })
+  test('falsePromises: the live Opus reply and other honest failures are clean; success claims are caught', () => {
+    const fx = readJson(ROOT, 'evals/fixtures/false-promises.json')
+    assert.deepEqual(falsePromises(fx.opusBaseline), [])
+    for (const t of fx.clean) assert.deepEqual(falsePromises(t), [], t)
+    for (const t of fx.falsePromise) assert.ok(falsePromises(t).length, t)
+    assert.deepEqual(falsePromises("Done! I'll remind you every Friday."), ['Done', "I'll remind you"])
+    for (const t of ["I won't remind you.", 'The reminder is not active.', "I'll retry in a minute."]) assert.deepEqual(falsePromises(t), [], t)
+  })
   test('noSecretIn does not echo the secret', () => assert.doesNotMatch(check({ noSecretIn: '+15555550100' })[0].message, /5555550100/))
   test('outbound collects every channel', () => assert.deepEqual(outbound(state).map((m) => `${m.channel}:${m.chat_id}`), ['sl:D1', 'dc:42', 'wa:w@s']))
   test('scenario validation rejects unknown assertions and missing inbound fields', () => {

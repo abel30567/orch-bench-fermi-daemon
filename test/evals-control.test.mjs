@@ -30,7 +30,7 @@ const runCli = (args) => {
 const NEGATIVES = {
   'cancelled-by-user-negative': ['task.status', 'argsMatch', 'outbox.count', 'argsMatch'],
   'model-switch-ordering-negative': ['order'],
-  'emergency-stop-mid-task-negative': ['task.status', 'argsMatch', 'argsMatch', 'exactlyOnce'],
+  'emergency-stop-mid-task-negative': ['task.status', 'argsMatch', 'argsMatch'],
   'teams-reply-shell-negative': ['exactlyOnce', 'argsMatch', 'notCalled', 'notCalled'],
   'audio-transcribe-negative': ['argsMatch', 'order'],
   'deferred-schedule-list-negative': ['order'],
@@ -74,7 +74,7 @@ describe('DMN-13 AC1: the control pack passes against the fake harness, every sc
 })
 
 describe('session mode (evals/lib/session.mjs)', () => {
-  test('emergency stop: the turn is interrupted after the in-flight tool, cleanup and a later turn run in the same session', async () => {
+  test('emergency stop: the turn is interrupted at the first Fermi call after the claim, without mac_shell; cleanup and a later turn run in the same session', async () => {
     const out = tmp()
     const scenario = loadScenario(join(CONTROL, 'emergency-stop-mid-task.json'))
     const r = await runAttempt({ scenario, attempt: 1, harness: fake, timeoutMs: 10_000, outDir: out })
@@ -83,11 +83,55 @@ describe('session mode (evals/lib/session.mjs)', () => {
     const ends = trace.filter((e) => e.type === 'turn_end')
     assert.deepEqual(ends.map((e) => [e.ok, e.interrupted ?? false]), [[false, true], [true, false], [true, false]])
     assert.equal(trace.filter((e) => e.type === 'init').length, 1) // one session, not three
-    // The steps scripted after the interrupted mac_shell never ran.
+    // The model never reached mac_shell (it asks a question first); the stop still fired,
+    // right after the claim's next Fermi call, and the steps scripted after it never ran.
+    assert.ok(!trace.some((e) => e.type === 'tool_call' && e.name === 'mac_shell'))
     const first = trace.slice(0, trace.indexOf(ends[0]))
+    assert.deepEqual(first.filter((e) => e.type === 'tool_call').map((e) => e.name), ['task_claim', 'context_bootstrap'])
     assert.equal(first.at(-1).type, 'tool_result')
-    assert.ok(!first.some((e) => e.type === 'tool_call' && e.name === 'task_complete'))
     assert.deepEqual(trace.filter((e) => e.type === 'text').map((e) => e.text), ['OK'])
+  })
+
+  test('emergency stop: harness-internal calls do not trigger it; with no Fermi call it fires `ms` after the claim', async () => {
+    const base = loadScenario(join(CONTROL, 'emergency-stop-mid-task.json'))
+    const [, cleanup, keepalive] = base.fake.turns
+    const scenario = {
+      ...base,
+      session: [{ turn: 'drain', interruptAfter: { afterClaim: true, ms: 200 } }, { turn: 'stop' }, { turn: 'keepalive' }],
+      fake: {
+        turns: [
+          [
+            { tool: 'task_claim', args: { limit: 1, stale_minutes: 25 } },
+            { internal: 'ToolSearch', args: { query: 'select:mcp__fermi__mac_shell' } },
+            { sleepMs: 600 },
+            { tool: 'mac_shell', args: { command: '~/bin/eval-backup.sh --full' } },
+          ],
+          cleanup,
+          keepalive,
+        ],
+      },
+    }
+    const out = tmp()
+    const r = await runAttempt({ scenario, attempt: 1, harness: fake, timeoutMs: 10_000, outDir: out })
+    assert.equal(r.pass, true, JSON.stringify(r.failed))
+    const trace = readTrace(out, scenario.name, '1', 'trace.jsonl')
+    const ends = trace.filter((e) => e.type === 'turn_end')
+    assert.deepEqual(ends.map((e) => e.interrupted ?? false), [true, false, false])
+    const first = trace.slice(0, trace.indexOf(ends[0]))
+    assert.deepEqual(first.filter((e) => e.type === 'tool_call').map((e) => e.name), ['task_claim', 'ToolSearch'])
+  })
+
+  test('interruptAfter must be a tool name or { afterClaim: true, ms? }', () => {
+    const dir = tmp()
+    const base = { inbound: { channel: 'sl', sender: 'x', chat: 'y', text: 'z' }, expect: [{ called: 'channel_send' }] }
+    for (const interruptAfter of [{ afterClaim: true, ms: 0 }, { ms: 100 }, 3]) {
+      writeFileSync(join(dir, 'i.json'), JSON.stringify({ ...base, session: [{ turn: 'drain', interruptAfter }] }))
+      assert.throws(() => loadScenario(join(dir, 'i.json')), /interruptAfter must be/, JSON.stringify(interruptAfter))
+    }
+    for (const interruptAfter of ['mac_shell', { afterClaim: true }, { afterClaim: true, ms: 5000 }]) {
+      writeFileSync(join(dir, 'i.json'), JSON.stringify({ ...base, session: [{ turn: 'drain', interruptAfter }] }))
+      assert.doesNotThrow(() => loadScenario(join(dir, 'i.json')), JSON.stringify(interruptAfter))
+    }
   })
 
   test('the session gets the rendered drain.md as its system prompt and the warm-worker turn texts in order', async () => {

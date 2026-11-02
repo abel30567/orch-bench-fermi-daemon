@@ -96,4 +96,20 @@ describe('core pack under the fake harness', () => {
       } else assert.equal(res.pass, true, `${res.scenario}: ${JSON.stringify(res.failed)}`)
     }
   })
+
+  test('maxToolCalls budgets Fermi calls only: a ToolSearch plus 5 Fermi calls passes maxToolCalls 5, and results.json reports it', () => {
+    const out = mkdtempSync(join(tmpdir(), 'dmn12-'))
+    const r = spawnSync(process.execPath, ['--import', PRELOAD, join(ROOT, 'evals/run.mjs'), '--harness', 'fake', '--scenarios', `${CORE}/drain-stop-on-empty.json`, '--out', out], {
+      cwd: ROOT,
+      env,
+      encoding: 'utf8',
+      timeout: 60_000,
+    })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    const [res] = JSON.parse(readFileSync(join(out, 'results.json'), 'utf8'))
+    assert.ok(all['drain-stop-on-empty'].expect.some((a) => a.maxToolCalls === 5))
+    assert.equal(res.pass, true, JSON.stringify(res.failed))
+    assert.deepEqual(res.internalToolCalls, ['ToolSearch'])
+    assert.deepEqual(res.toolCalls, ['ToolSearch', 'task_claim', 'context_bootstrap', 'channel_send', 'task_complete', 'task_claim'])
+  })
 })
